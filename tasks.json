@@ -3,18 +3,18 @@
     "tasks": [
         {
             "type": "shell",
-            "label": "C: main.c をビルド",
+            "label": "C: すべての C ファイルをビルド",
             "command": "C:\\msys64\\ucrt64\\bin\\gcc.exe",
             "args": [
                 "-fdiagnostics-color=always",
                 "-g",
-                "${workspaceFolder}\\main.c",
+                "*.c",
                 "-o",
                 "${workspaceFolder}\\main.exe",
                 "-lws2_32"
             ],
             "options": {
-                "cwd": "C:\\msys64\\ucrt64\\bin"
+                "cwd": "${workspaceFolder}"
             },
             "problemMatcher": [
                 "$gcc"

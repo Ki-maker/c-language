@@ -3,6 +3,8 @@
 #include <string.h>
 #include <winsock2.h>
 
+#include "search.h"
+
 #pragma comment(lib, "ws2_32.lib")
 
 #define PORT 8080
@@ -82,6 +84,7 @@ int main(void)
         if (strncmp(request, "GET /style.css", strlen("GET /style.css")) == 0) {
             file_name = "style.css";
             content_type = "text/css; charset=UTF-8";
+        } else if (handle_search_request(request)) {
         } else if (strncmp(request, "GET / ", 6) != 0 &&
                    strncmp(request, "GET /?", 6) != 0) {
             const char error_response[] =

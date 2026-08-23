@@ -13,11 +13,13 @@
             <p class="description">動画の字幕から、探したい言葉を見つけます。</p>
         </section>
         <section class="search-panel">
-            <label for="keyword">検索キーワード</label>
-            <div class="search-row">
-                <input id="keyword" type="search" placeholder="例: C言語">
-                <button type="button">検索</button>
-            </div>
+            <form action="/search" method="get">
+                <label for="keyword">検索キーワード</label>
+                <div class="search-row">
+                    <input id="keyword" name="keyword" type="search" placeholder="例: C言語">
+                    <button type="submit">検索</button>
+                </div>
+            </form>
         </section>
     </main>
 </body>
