@@ -3,16 +3,15 @@
     "tasks": [
         {
             "type": "shell",
-            "label": "C/C++: gcc ビルド (curl & cjson リンク)",
+            "label": "C: main.c をビルド",
             "command": "C:\\msys64\\ucrt64\\bin\\gcc.exe",
             "args": [
                 "-fdiagnostics-color=always",
                 "-g",
-                "${file}",
+                "${workspaceFolder}\\main.c",
                 "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe",
-                "-lcurl",
-                "-lcjson"
+                "${workspaceFolder}\\main.exe",
+                "-lws2_32"
             ],
             "options": {
                 "cwd": "C:\\msys64\\ucrt64\\bin"
