@@ -3,12 +3,16 @@
 #include <string.h>
 #include <winsock2.h>
 
-#include "search.h"
+#include "router.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
 #define PORT 8080
 
+/*
+ * すべてのデータを送信するためのヘルパー関数.
+ * Returns 1 if all dataが正常に送信された, 0 そうでない場合.
+ */
 static int send_all(SOCKET client_socket, const char *data, int length)
 {
     int total_sent = 0;
@@ -25,6 +29,9 @@ static int send_all(SOCKET client_socket, const char *data, int length)
     return 1;
 }
 
+/*
+ * フラウザとの接続設定.
+ */
 int main(void)
 {
     WSADATA wsa_data;
@@ -81,12 +88,9 @@ int main(void)
 
         const char *file_name = "index.html";
         const char *content_type = "text/html; charset=UTF-8";
-        if (strncmp(request, "GET /style.css", strlen("GET /style.css")) == 0) {
-            file_name = "style.css";
-            content_type = "text/css; charset=UTF-8";
-        } else if (handle_search_request(request)) {
-        } else if (strncmp(request, "GET / ", 6) != 0 &&
-                   strncmp(request, "GET /?", 6) != 0) {
+        const char *search_message = NULL;
+        if (!route_request(request, &file_name, &content_type,
+                           &search_message)) {
             const char error_response[] =
                 "HTTP/1.1 404 Not Found\r\n"
                 "Content-Type: text/plain; charset=UTF-8\r\n"
@@ -120,7 +124,7 @@ int main(void)
         fseek(html_file, 0, SEEK_END);
         long body_length = ftell(html_file);
         rewind(html_file);
-        char *body = malloc((size_t)body_length);
+        char *body = malloc((size_t)body_length + 1);
         if (body == NULL ||
             fread(body, 1, (size_t)body_length, html_file) !=
                 (size_t)body_length) {
@@ -130,6 +134,16 @@ int main(void)
             continue;
         }
         fclose(html_file);
+        body[body_length] = '\0';
+
+        // 他の接続先のcファイルの処理に失敗した場合
+        if (!replace_message_placeholder(
+                &body, &body_length,
+                search_message != NULL ? search_message : "")) {
+            free(body);
+            closesocket(client_socket);
+            continue;
+        }
 
         int header_length = snprintf(
             response, sizeof(response),
