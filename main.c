@@ -6,7 +6,6 @@
 #pragma comment(lib, "ws2_32.lib")
 
 #define PORT 8080
-#define HTML_FILE "index.html"
 
 static int send_all(SOCKET client_socket, const char *data, int length)
 {
@@ -70,9 +69,36 @@ int main(void)
             break;
         }
 
-        recv(client_socket, request, sizeof(request) - 1, 0);
+        int request_length = recv(client_socket, request,
+                                  sizeof(request) - 1, 0);
+        if (request_length <= 0) {
+            closesocket(client_socket);
+            continue;
+        }
+        request[request_length] = '\0';
 
-        FILE *html_file = fopen(HTML_FILE, "rb");
+        const char *file_name = "index.html";
+        const char *content_type = "text/html; charset=UTF-8";
+        if (strncmp(request, "GET /style.css", strlen("GET /style.css")) == 0) {
+            file_name = "style.css";
+            content_type = "text/css; charset=UTF-8";
+        } else if (strncmp(request, "GET / ", 6) != 0 &&
+                   strncmp(request, "GET /?", 6) != 0) {
+            const char error_response[] =
+                "HTTP/1.1 404 Not Found\r\n"
+                "Content-Type: text/plain; charset=UTF-8\r\n"
+                "Content-Length: 10\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "Not Found.\n";
+            send_all(client_socket, error_response,
+                     (int)strlen(error_response));
+            shutdown(client_socket, SD_SEND);
+            closesocket(client_socket);
+            continue;
+        }
+
+        FILE *html_file = fopen(file_name, "rb");
         if (html_file == NULL) {
             const char error_response[] =
                 "HTTP/1.1 500 Internal Server Error\r\n"
@@ -80,7 +106,7 @@ int main(void)
                 "Content-Length: 21\r\n"
                 "Connection: close\r\n"
                 "\r\n"
-                "HTML file not found.\n";
+                "File not found.\n";
             send_all(client_socket, error_response,
                      (int)strlen(error_response));
             shutdown(client_socket, SD_SEND);
@@ -105,11 +131,11 @@ int main(void)
         int header_length = snprintf(
             response, sizeof(response),
             "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/html; charset=UTF-8\r\n"
+            "Content-Type: %s\r\n"
             "Content-Length: %ld\r\n"
             "Connection: close\r\n"
             "\r\n",
-            body_length);
+            content_type, body_length);
 
         if (!send_all(client_socket, response, header_length) ||
             !send_all(client_socket, body, (int)body_length)) {

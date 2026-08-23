@@ -1,0 +1,126 @@
+:root {
+    color-scheme: light;
+    --ink: #17202a;
+    --muted: #64707d;
+    --paper: #f4f7f8;
+    --panel: #ffffff;
+    --accent: #ef6c45;
+    --accent-dark: #685854;
+    --line: #dce3e7;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--ink);
+    background: linear-gradient(135deg, #f4f7f8 0%, #e5eef0 100%);
+    font-family: Georgia, "Yu Mincho", serif;
+}
+
+.page-shell {
+    width: min(900px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 12vh 0 10vh;
+}
+
+.hero {
+    padding: 48px;
+    background: var(--ink);
+    color: #ffffff;
+    border-left: 8px solid var(--accent);
+}
+
+.eyebrow {
+    margin: 0 0 24px;
+    color: #f5a486;
+    font-family: "Courier New", monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.12rem;
+}
+
+h1 {
+    margin: 0;
+    font-size: clamp(2.2rem, 6vw, 4.8rem);
+    line-height: 1.1;
+}
+
+.description {
+    max-width: 34rem;
+    margin: 24px 0 0;
+    color: #c9d2d7;
+    font-size: 1.1rem;
+}
+
+.search-panel {
+    padding: 32px 48px 40px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-top: 0;
+}
+
+label {
+    display: block;
+    margin-bottom: 10px;
+    font-family: "Courier New", monospace;
+    font-size: 0.85rem;
+    font-weight: bold;
+}
+
+.search-row {
+    display: flex;
+    gap: 12px;
+}
+
+input,
+button {
+    min-height: 48px;
+    font: inherit;
+}
+
+input {
+    flex: 1;
+    min-width: 0;
+    padding: 0 16px;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 0;
+}
+
+input:focus {
+    outline: 3px solid #f5c5b5;
+    border-color: var(--accent);
+}
+
+button {
+    padding: 0 28px;
+    color: #ffffff;
+    background: var(--accent);
+    border: 0;
+    border-radius: 0;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover {
+    background: var(--accent-dark);
+}
+
+@media (max-width: 600px) {
+    .page-shell {
+        width: min(100% - 24px, 900px);
+        padding-top: 6vh;
+    }
+
+    .hero,
+    .search-panel {
+        padding: 28px 24px;
+    }
+
+    .search-row {
+        flex-direction: column;
+    }
+}

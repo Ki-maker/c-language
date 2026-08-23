@@ -3,9 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <title>YouTube 字幕検索</title>
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <h1>YouTube 字幕検索</h1>
-    <p>ここに字幕検索の機能を実装します。</p>
+    <main class="page-shell">
+        <section class="hero">
+            <p class="eyebrow">YOUTUBE TRANSCRIPT SEARCH</p>
+            <h1>YouTube 字幕検索</h1>
+            <p class="description">動画の字幕から、探したい言葉を見つけます。</p>
+        </section>
+        <section class="search-panel">
+            <label for="keyword">検索キーワード</label>
+            <div class="search-row">
+                <input id="keyword" type="search" placeholder="例: C言語">
+                <button type="button">検索</button>
+            </div>
+        </section>
+    </main>
 </body>
 </html>
