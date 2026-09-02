@@ -1,15 +1,16 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g
-LDLIBS = -lws2_32
+CPPFLAGS = -Irouter -Isearch
+LDLIBS = -lcurl -lws2_32
 TARGET = main.exe
-SOURCES = $(wildcard *.c)
+SOURCES = $(wildcard *.c router/*.c search/*.c)
 
 .PHONY: all clean
 
 all: $(TARGET)
 
 $(TARGET): $(SOURCES)
-	$(CC) $(CFLAGS) $(SOURCES) -o $(TARGET) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SOURCES) -o $(TARGET) $(LDLIBS)
 
 clean:
 	rm -f $(TARGET)
