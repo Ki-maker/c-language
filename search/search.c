@@ -9,21 +9,53 @@
 
 #include "search.h"
 
+#define BUFFER_API_RESPONSE 256
+#define BUFFER_END 1
+
+typedef struct {
+    char api_response[BUFFER_API_RESPONSE + BUFFER_END];
+    size_t response_length;
+    size_t capacity;
+    response_writer writer;
+    void *writer_context;
+} response_context;
+
+
 /*
  * sizeとcountをかけたバイト数を返すコールバック関数.
  * Returns total_size
  */
 static size_t write_callback(void *contents, size_t size,
-                             size_t count, void *user_data)
+                             size_t count, void *body_data)
 {
-    // size_tはsize * count分のバイトが入る
-    size_t total_size = size * count;
+    // body_dataはvoid型なので、別変数でresponse_context型に変更する必要がある
+    response_context *context = body_data;
 
-    // コンパイラに使わないことを残している
-    // contentsがresponseのデータを指すポインタであることを示すために、user_dataは使わない
-    (void)user_data;
-    printf("%.*s", (int)total_size, (char *)contents);
-    return total_size;
+    // API Response(contents)の容量を求める
+    size_t api_response_size = size * count;
+
+    // 必要な容量を計算する
+    // context->response_lengthはすでに格納されている容量、api_response_sizeは新たに追加される容量
+    size_t required_capacity = context->response_length +
+                               api_response_size + BUFFER_END;
+
+    // bodyの容量が足りない場合、0を返す
+    //  context->capacityはあらかじめ確保している容量
+    if (required_capacity > context->capacity) {
+        printf("API RESPONSEを追加した際に必要な容量が不足しています\n");
+        return 0;
+    }
+
+    // writerがNULLでない場合、writer(main.cにあるsend_chunk)を使ってデータをHTTPソケットへ送信する
+    if (context->writer != NULL) {
+        if (!context->writer(context->writer_context, contents,
+                             api_response_size)) {
+            return 0;
+        }
+        return api_response_size;
+    }
+    // TODO: ソケット通信しているmain.cにあるsend_chunk関数をみて、APIレスポンスをHTTPソケットへ送信する処理を追加する
+    return api_response_size;
 }
 
 /*
@@ -43,58 +75,15 @@ const char *handle_search_request(const char *request)
 #endif
         printf("検索ボタンが押されました\n");
         fflush(stdout);
-        get_searchResults();
         return "検索ボタンが押されました";
     }
 
     return NULL;
 }
 
-int replace_message_placeholder(char **body, long *body_length,
-                                const char *message)
-{
-    const char placeholder[] = "{{message}}";
-
-    // strstr(検索対象の文字列, 探す文字列)
-    char *placeholder_position = strstr(*body, placeholder);
-
-    // bodyの中でplaceholderが見つからなかった場合、1を返す
-    if (placeholder_position == NULL) {
-        return 1;
-    }
-
-    // 例えば、*body = "<p>{{message}}</p>";の場合、{{message}}の前の<p>のバイト数(3バイト)となる
-    size_t prefix_length = (size_t)(placeholder_position - *body);
-    // 例えば、*body = "<p>{{message}}</p>";の場合、{{message}}の後の</p>のバイト数(4バイト)となる
-    size_t suffix_length = strlen(placeholder_position + strlen(placeholder));
-    // messageの長さ
-    size_t message_length = strlen(message);
-    // ↑の3つと/0の分のバイト数を確保する
-    char *updated_body = malloc(prefix_length + message_length +
-                                 suffix_length + 1);
-    if (updated_body == NULL) {
-        return 0;
-    }
-
-    // memcpy(コピー先, コピー元, コピーするバイト数);
-    // 例えば、{{ message }}=検索結果であり、*body = "<p>{{message}}</p>";の場合、updated_body = "<p>検索結果</p>";となる
-    memcpy(updated_body, *body, prefix_length);
-    // messageを、updated_bodyのprefix_lengthバイト後から書き込む
-    memcpy(updated_body + prefix_length, message, message_length);
-    // messageを、updated_bodyのprefix_length + message_lengthバイト後から書き込む
-    memcpy(updated_body + prefix_length + message_length,
-           placeholder_position + strlen(placeholder), suffix_length + 1);
-
-    // 旧bodyを解放し、bodyを更新する
-    free(*body);
-    // 引数に設定している*bodyを更新する
-    *body = updated_body;
-    // 引数に設定しているbody_lengthを更新する
-    *body_length = (long)(prefix_length + message_length + suffix_length);
-    return 1;
-}
-
-void get_searchResults(void) {
+int get_searchResults(const char *request, response_writer writer,
+                      void *writer_context) {
+    (void)request;
     // 検索結果を取得する処理をここに実装する
 
     // API呼び出しの初期設定
@@ -108,13 +97,21 @@ void get_searchResults(void) {
 
     if (curl == NULL) {
         fprintf(stderr, "curlの初期化に失敗しました\n");
-        return;
+        return 0;
     }
+
+
+    response_context context = {
+        .response_length = 0, // APIレスポンスの長さを初期化
+        .capacity = BUFFER_API_RESPONSE + BUFFER_END,
+        .writer = writer, // 受信した API データを書き込む処理
+        .writer_context = writer_context
+    };
 
     if (api_key == NULL || api_key[0] == '\0') {
         fprintf(stderr, "YOUTUBE_API_KEYが設定されていません\n");
         curl_easy_cleanup(curl);
-        return;
+        return 0;
     }
 
     // 検索文字列をURLの使える形に変更する
@@ -123,7 +120,7 @@ void get_searchResults(void) {
     if (encoded_query == NULL) {
         fprintf(stderr, "検索語のURLエンコードに失敗しました\n");
         curl_easy_cleanup(curl);
-        return;
+        return 0;
     }
 
     // URLをセットする
@@ -139,20 +136,27 @@ void get_searchResults(void) {
 
     // レスポンスを標準出力に書き込むためのコールバック関数を設定する
     //レスポンスデータはwrite_callback関数で処理される
+
+    // CURLOPT_WRITEFUNCTION=どの関数を呼ぶのか
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 
+    // CURLOPT_WRITEDATA=一つ上で設定している関数にどのデータの引数を渡すのか
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &context);
     // 通信を実行する
     // resultには通信の結果が格納される。CURLE_OKであれば成功
     CURLcode result = curl_easy_perform(curl);
 
     if (result != CURLE_OK) {
-    fprintf(stderr, "通信エラー: %s\n",
+        fprintf(stderr, "通信エラー: %s\n",
             curl_easy_strerror(result));
-}
+        curl_free(encoded_query);
+        curl_easy_cleanup(curl);
+        return 0;
+        }
 
 // メモ：libcurlが管理するデータはメモリ開放する必要がある
-
 curl_free(encoded_query);
 // ibcurlが作成したCURL専用のデータを解放する関数(freeと同じ意味)
 curl_easy_cleanup(curl);
+return 1;
 }

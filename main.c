@@ -29,6 +29,60 @@ static int send_all(SOCKET client_socket, const char *data, int length)
     return 1;
 }
 
+static int send_chunk(void *context, const char *data, size_t length)
+{
+    SOCKET client_socket = *(SOCKET *)context;
+    char header[32];
+    int header_length = snprintf(header, sizeof(header), "%zx\r\n", length);
+
+    return send_all(client_socket, header, header_length) &&
+           send_all(client_socket, data, (int)length) &&
+           send_all(client_socket, "\r\n", 2);
+}
+
+static int send_template(FILE *html_file, SOCKET client_socket,
+                         const char *request, const char *message)
+{
+    static const char api_placeholder[] = "{{api_res_data}}";
+    static const char message_placeholder[] = "{{message}}";
+    char candidate[32];
+    int current;
+
+    while ((current = fgetc(html_file)) != EOF) {
+        if (current != '{') {
+            char character = (char)current;
+            if (!send_chunk(&client_socket, &character, 1)) {
+                return 0;
+            }
+            continue;
+        }
+
+        size_t candidate_length = 0;
+        candidate[candidate_length++] = (char)current;
+        while (candidate_length < sizeof(candidate) - 1 &&
+               (current = fgetc(html_file)) != EOF) {
+            candidate[candidate_length++] = (char)current;
+            if (candidate_length >= 2 &&
+                candidate[candidate_length - 1] == '}' &&
+                candidate[candidate_length - 2] == '}') {
+                break;
+            }
+        }
+        candidate[candidate_length] = '\0';
+
+        if (strcmp(candidate, api_placeholder) == 0 && message != NULL) {
+            if (!get_searchResults(request, send_chunk, &client_socket)) {
+                return 0;
+            }
+        } else if (strcmp(candidate, message_placeholder) != 0 &&
+                   !send_chunk(&client_socket, candidate, candidate_length)) {
+            return 0;
+        }
+    }
+
+    return ferror(html_file) == 0;
+}
+
 /*
  * フラウザとの接続設定.
  */
@@ -121,45 +175,23 @@ int main(void)
             continue;
         }
 
-        fseek(html_file, 0, SEEK_END);
-        long body_length = ftell(html_file);
-        rewind(html_file);
-        char *body = malloc((size_t)body_length + 1);
-        if (body == NULL ||
-            fread(body, 1, (size_t)body_length, html_file) !=
-                (size_t)body_length) {
-            fclose(html_file);
-            free(body);
-            closesocket(client_socket);
-            continue;
-        }
-        fclose(html_file);
-        body[body_length] = '\0';
-
-        // 他の接続先のcファイルの処理に失敗した場合
-        if (!replace_message_placeholder(
-                &body, &body_length,
-                search_message != NULL ? search_message : "")) {
-            free(body);
-            closesocket(client_socket);
-            continue;
-        }
-
         int header_length = snprintf(
             response, sizeof(response),
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: %s\r\n"
-            "Content-Length: %ld\r\n"
+            "Transfer-Encoding: chunked\r\n"
             "Connection: close\r\n"
             "\r\n",
-            content_type, body_length);
+            content_type);
 
         if (!send_all(client_socket, response, header_length) ||
-            !send_all(client_socket, body, (int)body_length)) {
+            !send_template(html_file, client_socket, request,
+                           search_message)) {
             fprintf(stderr, "Failed to send the HTTP response.\n");
         }
 
-        free(body);
+        fclose(html_file);
+        send_all(client_socket, "0\r\n\r\n", 5);
         shutdown(client_socket, SD_SEND);
         closesocket(client_socket);
     }
