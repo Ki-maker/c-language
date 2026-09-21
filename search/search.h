@@ -12,4 +12,9 @@ typedef int (*response_writer)(void *context, const char *data,
  */
 char *getYoutubeContents(const char *keyword);
 
+/*
+ * YouTube検索結果を OpenSearch に登録する.
+ * 1: 成功, 0: 失敗
+ */
+int setYoutubeContentsToOpenSearch(const char *keyword);
 #endif

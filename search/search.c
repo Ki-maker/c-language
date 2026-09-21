@@ -10,13 +10,13 @@
 #include "search.h"
 
 // TODO このメモリサイズは元に戻す
-#define BUFFER_API_RESPONSE 2560
+#define BUFFER_API_RESPONSE 30000
 #define BUFFER_END 1
 
 #define YOUTUBE_API_DOMAIN "https://www.googleapis.com/youtube/v3"
 #define YOUTUBE_SEARCH_PATH "/search"
 #define YOUTUBE_SEARCH_QUERY_FORMAT \
-    "?part=snippet&q=%s&type=video&maxResults=%d&key=%s"
+    "?part=snippet&q=%s&type=video&maxResults=%d&fields=items(id/videoId,snippet/title,snippet/channelId,snippet/channelTitle,snippet/thumbnails/medium/url,snippet/thumbnails/high/url)&key=%s"
 #define MAX_SEARCH_RESULTS 50
 
 typedef struct {
@@ -24,6 +24,60 @@ typedef struct {
     size_t length;
     size_t capacity;
 } response_buffer;
+
+/*
+ * 動画IDをJSONレスポンスから抽出する.
+ * 
+ */
+static void extract_video_ids(const char *json, char *out, size_t out_size)
+{
+    const char *cursor = json;
+    size_t out_len = 0;
+
+    out[0] = '\0';
+    if (out_size == 0) {
+        return;
+    }
+
+    while ((cursor = strstr(cursor, "\"videoId\"")) != NULL) {
+        const char *value_start;
+        const char *value_end;
+
+        cursor = strchr(cursor, ':');
+        if (cursor == NULL) {
+            break;
+        }
+        cursor++;
+
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == '\n' ||
+               *cursor == '\r') {
+            cursor++;
+        }
+
+        if (*cursor != '"') {
+            continue;
+        }
+        cursor++;
+        value_start = cursor;
+        value_end = strchr(value_start, '"');
+        if (value_end == NULL) {
+            break;
+        }
+
+        if (out_len > 0 && out_len + 1 < out_size) {
+            out[out_len++] = ',';
+        }
+
+        if (out_len + (size_t)(value_end - value_start) + 1 < out_size) {
+            memcpy(out + out_len, value_start,
+                   (size_t)(value_end - value_start));
+            out_len += (size_t)(value_end - value_start);
+            out[out_len] = '\0';
+        }
+
+        cursor = value_end + 1;
+    }
+}
 
 /*
  * sizeとcountをかけたバイト数を返すコールバック関数.
@@ -37,22 +91,8 @@ static size_t write_callback(void *contents, size_t size,
     size_t required_capacity = buffer->length + api_response_size + 1;
 
     if (required_capacity > buffer->capacity) {
-        size_t new_capacity = buffer->capacity == 0 ?
-                                  BUFFER_API_RESPONSE + BUFFER_END :
-                                  buffer->capacity;
-
-        while (new_capacity < required_capacity) {
-            new_capacity *= 2;
-        }
-
-        char *new_buffer = realloc(buffer->buffer, new_capacity);
-        if (new_buffer == NULL) {
-            fprintf(stderr, "APIレスポンスのメモリ確保に失敗しました\n");
-            return 0;
-        }
-
-        buffer->buffer = new_buffer;
-        buffer->capacity = new_capacity;
+     fprintf(stderr, "APIレスポンスがバッファサイズを超えました\n");
+     return 0;
     }
 
     memcpy(buffer->buffer + buffer->length, contents, api_response_size);
@@ -137,6 +177,9 @@ char *getYoutubeContents(const char *keyword)
              YOUTUBE_API_DOMAIN, YOUTUBE_SEARCH_PATH,
              encoded_query, MAX_SEARCH_RESULTS, api_key);
 
+    fprintf(stdout, "[YouTube Search API URL]\n%s\n", url);
+    fflush(stdout);
+
     // API を呼ぶ前に、レスポンスの受け取り方や保存先を先に設定する
     // CURLOPT_URL = URLを設定する
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -161,5 +204,70 @@ char *getYoutubeContents(const char *keyword)
         return NULL;
     }
 
+    //動画IDをもとに再生数、高評価数、コメント数を取得する
+    if (response.buffer != NULL && response.buffer[0] != '\0')
+    {
+        char video_ids[4096] = {0};
+        CURL *stats_curl = curl_easy_init();
+        char stats_url[900];
+        response_buffer stats_response = {0};
+
+        extract_video_ids(response.buffer, video_ids, sizeof(video_ids));
+        if (video_ids[0] == '\0') {
+            fprintf(stderr, "動画IDの抽出に失敗しました\n");
+            return response.buffer;
+        }
+
+        if (stats_curl != NULL) {
+            stats_response.buffer = malloc(BUFFER_API_RESPONSE + BUFFER_END);
+            if (stats_response.buffer != NULL) {
+                stats_response.buffer[0] = '\0';
+                stats_response.length = 0;
+                stats_response.capacity = BUFFER_API_RESPONSE + BUFFER_END;
+
+                snprintf(stats_url, sizeof(stats_url),
+                         "%s/videos?part=statistics&id=%s&fields=items(id,statistics(viewCount,likeCount,commentCount))&key=%s",
+                         YOUTUBE_API_DOMAIN, video_ids, api_key);
+
+                fprintf(stdout, "[YouTube Statistics API URL]\n%s\n",
+                        stats_url);
+                fflush(stdout);
+
+                curl_easy_setopt(stats_curl, CURLOPT_URL, stats_url);
+                curl_easy_setopt(stats_curl, CURLOPT_WRITEFUNCTION,
+                                 write_callback);
+                curl_easy_setopt(stats_curl, CURLOPT_WRITEDATA,
+                                 &stats_response);
+
+                CURLcode stats_result = curl_easy_perform(stats_curl);
+                curl_easy_cleanup(stats_curl);
+
+                if (stats_result == CURLE_OK && stats_response.buffer != NULL &&
+                    stats_response.buffer[0] != '\0') {
+                    fprintf(stdout, "[YouTube Video Statistics]\n%s\n",
+                            stats_response.buffer);
+                    fflush(stdout);
+                } else {
+                    fprintf(stderr, "動画統計APIの取得に失敗しました\n");
+                }
+
+                free(stats_response.buffer);
+            } else {
+                curl_easy_cleanup(stats_curl);
+                fprintf(stderr, "動画統計のバッファ確保に失敗しました\n");
+            }
+        }
+    }
+
     return response.buffer;
+}
+
+/*
+ * APIのデータをOpenSearchに登録する.
+ * 1: 成功, 0: 失敗
+ */
+int setYoutubeContentsToOpenSearch(const char *keyword) {
+    printf("OpenSearchにデータを登録します: %s\n", keyword);
+    fflush(stdout);
+    return 1;
 }
