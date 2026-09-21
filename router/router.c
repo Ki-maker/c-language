@@ -20,8 +20,7 @@ int route_request(const char *request, const char **file_name,
         return 1;
     }
 
-    *message = handle_search_request(request);
-    if (*message != NULL) {
+    if (strncmp(request, "GET /search", strlen("GET /search")) == 0) {
         return 1;
     }
 

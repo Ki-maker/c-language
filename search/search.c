@@ -20,13 +20,10 @@
 #define MAX_SEARCH_RESULTS 50
 
 typedef struct {
-    char api_response[BUFFER_API_RESPONSE + BUFFER_END];
-    size_t response_length;
+    char *buffer;
+    size_t length;
     size_t capacity;
-    response_writer writer;
-    void *writer_context;
-} response_context;
-
+} response_buffer;
 
 /*
  * sizeとcountをかけたバイト数を返すコールバック関数.
@@ -35,33 +32,33 @@ typedef struct {
 static size_t write_callback(void *contents, size_t size,
                              size_t count, void *body_data)
 {
-    // body_dataはvoid型なので、別変数でresponse_context型に変更する必要がある
-    response_context *context = body_data;
-
-    // API Response(contents)の容量を求める
+    response_buffer *buffer = body_data;
     size_t api_response_size = size * count;
+    size_t required_capacity = buffer->length + api_response_size + 1;
 
-    // 必要な容量を計算する
-    // context->response_lengthはすでに格納されている容量、api_response_sizeは新たに追加される容量
-    size_t required_capacity = context->response_length +
-                               api_response_size + BUFFER_END;
+    if (required_capacity > buffer->capacity) {
+        size_t new_capacity = buffer->capacity == 0 ?
+                                  BUFFER_API_RESPONSE + BUFFER_END :
+                                  buffer->capacity;
 
-    // bodyの容量が足りない場合、0を返す
-    //  context->capacityはあらかじめ確保している容量
-    if (required_capacity > context->capacity) {
-        printf("API RESPONSEを追加した際に必要な容量が不足しています\n");
-        return 0;
-    }
+        while (new_capacity < required_capacity) {
+            new_capacity *= 2;
+        }
 
-    // writerがNULLでない場合、writer(main.cにあるsend_chunk)を使ってデータをHTTPソケットへ送信する
-    if (context->writer != NULL) {
-        if (!context->writer(context->writer_context, contents,
-                             api_response_size)) {
+        char *new_buffer = realloc(buffer->buffer, new_capacity);
+        if (new_buffer == NULL) {
+            fprintf(stderr, "APIレスポンスのメモリ確保に失敗しました\n");
             return 0;
         }
-        return api_response_size;
+
+        buffer->buffer = new_buffer;
+        buffer->capacity = new_capacity;
     }
-    // TODO: ソケット通信しているmain.cにあるsend_chunk関数をみて、APIレスポンスをHTTPソケットへ送信する処理を追加する
+
+    memcpy(buffer->buffer + buffer->length, contents, api_response_size);
+    buffer->length += api_response_size;
+    buffer->buffer[buffer->length] = '\0';
+
     return api_response_size;
 }
 
@@ -89,85 +86,80 @@ const char *handle_search_request(const char *request)
 }
 
 /*
- * API検索して、OpenSearchにデータを入れる処理を行う.
- * Returns the message 検索結果, NULL 検索に失敗.
+ * API検索して、JSON文字列を返す.
+ * 呼び出し元は free() で解放する必要がある.
  */
-int getYoutubeContents(const char *keyword, response_writer writer,
-                      void *writer_context)
+char *getYoutubeContents(const char *keyword)
 {
-    // API呼び出しの初期設定
-    // 通信の準備をする関数の設定
     CURL *curl = curl_easy_init();
     const char *api_key = getenv("YOUTUBE_API_KEY");
-    char *encoded_query;
+    char *encoded_query = NULL;
     char url[1024];
+    response_buffer response = {0};
 
     if (curl == NULL) {
         fprintf(stderr, "curlの初期化に失敗しました\n");
-        return 0;
+        return NULL;
     }
 
     if (keyword == NULL || keyword[0] == '\0') {
         fprintf(stderr, "検索キーワードが空です\n");
         curl_easy_cleanup(curl);
-        return 0;
+        return NULL;
     }
-
-    response_context context = {
-        .response_length = 0, // APIレスポンスの長さを初期化
-        .capacity = BUFFER_API_RESPONSE + BUFFER_END,
-        .writer = writer, // 受信した API データを書き込む処理
-        .writer_context = writer_context
-    };
 
     if (api_key == NULL || api_key[0] == '\0') {
         fprintf(stderr,
-                "YOUTUBE_API_KEYが設定されていません。Fargate では ECS secret から注入してください\n");
+                "YOUTUBE_API_KEYが設定されていません。\n");
         curl_easy_cleanup(curl);
-        return 0;
+        return NULL;
     }
 
-    // 検索文字列をURLの使える形に変更する
-    // 第三引数の0は'\0'まで自動判定
+    response.buffer = malloc(BUFFER_API_RESPONSE + BUFFER_END);
+    if (response.buffer == NULL) {
+        fprintf(stderr, "JSONバッファの初期化に失敗しました\n");
+        curl_easy_cleanup(curl);
+        return NULL;
+    }
+    response.buffer[0] = '\0';
+    response.length = 0;
+    response.capacity = BUFFER_API_RESPONSE + BUFFER_END;
+
     encoded_query = curl_easy_escape(curl, keyword, 0);
     if (encoded_query == NULL) {
         fprintf(stderr, "検索語のURLエンコードに失敗しました\n");
+        free(response.buffer);
         curl_easy_cleanup(curl);
-        return 0;
+        return NULL;
     }
 
-    // URLをセットする
-    // snprintf(書き込み先, 最大サイズ, 書式, 値1, 値2);
     snprintf(url, sizeof(url), "%s%s" YOUTUBE_SEARCH_QUERY_FORMAT,
              YOUTUBE_API_DOMAIN, YOUTUBE_SEARCH_PATH,
              encoded_query, MAX_SEARCH_RESULTS, api_key);
 
-    // CURLOPT_URLはどこで通信するのかを決める
+    // API を呼ぶ前に、レスポンスの受け取り方や保存先を先に設定する
+    // CURLOPT_URL = URLを設定する
     curl_easy_setopt(curl, CURLOPT_URL, url);
-
-    // レスポンスを標準出力に書き込むためのコールバック関数を設定する
-    //レスポンスデータはwrite_callback関数で処理される
-
-    // CURLOPT_WRITEFUNCTION=どの関数を呼ぶのか
+    // CURLOPT_WRITEFUNCTION = レスポンスを受け取るコールバック関数
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    // CURLOPT_WRITEDATA = コールバック関数に渡すデータ
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
-    // CURLOPT_WRITEDATA=一つ上で設定している関数にどのデータの引数を渡すのか
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &context);
-    // 通信を実行する
-    // resultには通信の結果が格納される。CURLE_OKであれば成功
-    CURLcode result = curl_easy_perform(curl);
+    CURLcode result_code = curl_easy_perform(curl);
+    curl_free(encoded_query);
+    curl_easy_cleanup(curl);
 
-    if (result != CURLE_OK) {
+    if (result_code != CURLE_OK) {
         fprintf(stderr, "通信エラー: %s\n",
-                curl_easy_strerror(result));
-        curl_free(encoded_query);
-        curl_easy_cleanup(curl);
-        return 0;
+                curl_easy_strerror(result_code));
+        free(response.buffer);
+        return NULL;
     }
 
-    // メモ：libcurlが管理するデータはメモリ開放する必要がある
-    curl_free(encoded_query);
-    // ibcurlが作成したCURL専用のデータを解放する関数(freeと同じ意味)
-    curl_easy_cleanup(curl);
-    return 1;
+    if (response.buffer == NULL || response.buffer[0] == '\0') {
+        free(response.buffer);
+        return NULL;
+    }
+
+    return response.buffer;
 }

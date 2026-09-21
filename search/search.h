@@ -7,10 +7,9 @@ typedef int (*response_writer)(void *context, const char *data,
 							   size_t length);
 
 /*
- * API検索して、OpenSearchにデータを入れる処理を行うためのsearch.cファイルへの橋渡し.
+ * API検索して、JSON文字列を返す.
+ * 呼び出し元は返されたメモリを free() する必要がある.
  */
-const char *handle_search_request(const char *request);
-int getYoutubeContents(const char *keyword, response_writer writer,
-					   void *writer_context);
+char *getYoutubeContents(const char *keyword);
 
 #endif

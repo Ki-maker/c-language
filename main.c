@@ -152,15 +152,33 @@ static int send_template(FILE *html_file, SOCKET client_socket,
         }
         candidate[candidate_length] = '\0';
 
-        if (strcmp(candidate, api_placeholder) == 0 && message != NULL) {
+        if (strcmp(candidate, api_placeholder) == 0) {
+            char *api_result = NULL;
+
             if (keyword == NULL || keyword[0] == '\0') {
+                continue;
+            }
+
+            api_result = getYoutubeContents(keyword);
+            if (api_result == NULL) {
                 return 0;
             }
-            if (!getYoutubeContents(keyword, send_chunk, &client_socket)) {
+
+            fprintf(stdout, "[YouTube JSON]\n%s\n", api_result);
+            fflush(stdout);
+
+            if (!send_chunk(&client_socket, api_result, strlen(api_result))) {
+                free(api_result);
                 return 0;
             }
-        } else if (strcmp(candidate, message_placeholder) != 0 &&
-                   !send_chunk(&client_socket, candidate, candidate_length)) {
+
+            free(api_result);
+        } else if (strcmp(candidate, message_placeholder) == 0) {
+            if (message != NULL &&
+                !send_chunk(&client_socket, message, (int)strlen(message))) {
+                return 0;
+            }
+        } else if (!send_chunk(&client_socket, candidate, candidate_length)) {
             return 0;
         }
     }
