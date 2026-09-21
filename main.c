@@ -159,14 +159,14 @@ static int send_template(FILE *html_file, SOCKET client_socket,
                 continue;
             }
 
-            // API検索して、JSON文字列を返す.
-            api_result = getYoutubeContents(keyword);
+            // API検索して、整形済みのJSON文字列を返す.
+            api_result = getFormattedYoutubeContents(keyword);
             if (api_result == NULL) {
                 return 0;
             }
 
-            // fprintf(stdout, "[YouTube JSON]\n%s\n", api_result);
-            // fflush(stdout);
+            fprintf(stdout, "[YouTube JSON]\n%s\n", api_result);
+            fflush(stdout);
 
             if(api_result == NULL || strlen(api_result) == 0) {
                 fprintf(stderr, "APIレスポンスが空です\n");

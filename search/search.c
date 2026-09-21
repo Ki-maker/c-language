@@ -25,8 +25,130 @@ typedef struct {
     size_t capacity;
 } response_buffer;
 
+/**
+ * 文字列を複製する.
+ */
+static char *duplicate_string(const char *value)
+{
+    size_t length;
+    char *copy;
+
+    if (value == NULL) {
+        return NULL;
+    }
+
+    length = strlen(value);
+    copy = malloc(length + 1);
+    if (copy == NULL) {
+        return NULL;
+    }
+
+    memcpy(copy, value, length + 1);
+    return copy;
+}
+
+static char *escape_json_string(const char *value)
+{
+    size_t length;
+    size_t index;
+    size_t out_index = 0;
+    char *escaped;
+
+    if (value == NULL) {
+        value = "";
+    }
+
+    length = strlen(value);
+    escaped = malloc(length * 2 + 1);
+    if (escaped == NULL) {
+        return NULL;
+    }
+
+    for (index = 0; index < length; index++) {
+        unsigned char ch = (unsigned char)value[index];
+
+        if (ch == '\\' || ch == '"') {
+            escaped[out_index++] = '\\';
+            escaped[out_index++] = (char)ch;
+        } else if (ch == '\n') {
+            escaped[out_index++] = '\\';
+            escaped[out_index++] = 'n';
+        } else if (ch == '\r') {
+            escaped[out_index++] = '\\';
+            escaped[out_index++] = 'r';
+        } else if (ch == '\t') {
+            escaped[out_index++] = '\\';
+            escaped[out_index++] = 't';
+        } else if (ch < 0x20) {
+            snprintf(escaped + out_index, length * 2 + 1 - out_index,
+                     "\\u%04x", ch);
+            out_index += 6;
+        } else {
+            escaped[out_index++] = (char)ch;
+        }
+    }
+
+    escaped[out_index] = '\0';
+    return escaped;
+}
+
+static char *build_aggregate_json(const YouTubeApiContents *contents)
+{
+    size_t required_size = 256;
+    char *search_json;
+    char *stats_json;
+    char *content_json;
+    char *channel_json;
+    char *result;
+    int written;
+
+    if (contents == NULL) {
+        return NULL;
+    }
+
+    search_json = contents->search_json == NULL ? duplicate_string("null") : escape_json_string(contents->search_json);
+    stats_json = contents->stats_json == NULL ? duplicate_string("null") : escape_json_string(contents->stats_json);
+    content_json = contents->content_json == NULL ? duplicate_string("null") : escape_json_string(contents->content_json);
+    channel_json = contents->channel_json == NULL ? duplicate_string("null") : escape_json_string(contents->channel_json);
+
+    if (search_json == NULL || stats_json == NULL ||
+        content_json == NULL || channel_json == NULL) {
+        free(search_json);
+        free(stats_json);
+        free(content_json);
+        free(channel_json);
+        return NULL;
+    }
+
+    required_size += strlen(search_json) + strlen(stats_json) +
+                     strlen(content_json) + strlen(channel_json);
+    result = malloc(required_size);
+    if (result == NULL) {
+        free(search_json);
+        free(stats_json);
+        free(content_json);
+        free(channel_json);
+        return NULL;
+    }
+
+    written = snprintf(result, required_size,
+                       "{\"search\":\"%s\",\"statistics\":\"%s\",\"contentDetails\":\"%s\",\"channel\":\"%s\"}",
+                       search_json, stats_json, content_json, channel_json);
+    if (written < 0 || (size_t)written >= required_size) {
+        free(result);
+        result = NULL;
+    }
+
+    free(search_json);
+    free(stats_json);
+    free(content_json);
+    free(channel_json);
+    return result;
+}
+
 static size_t write_callback(void *contents, size_t size,
                              size_t count, void *body_data);
+
 /*
  * YouTube APIからデータを取得する.
  * 1: 成功, 0: 失敗
@@ -234,16 +356,17 @@ const char *handle_search_request(const char *request)
 }
 
 /*
- * API検索して、JSON文字列を返す.
- * 呼び出し元は free() で解放する必要がある.
+ * API検索して、検索結果と追加取得したデータをまとめた構造体を返す.
+ * 呼び出し元は freeYoutubeApiContents() で解放する必要がある.
  */
-char *getYoutubeContents(const char *keyword)
+YouTubeApiContents *getYoutubeContents(const char *keyword)
 {
     CURL *curl = curl_easy_init();
     const char *api_key = getenv("YOUTUBE_API_KEY");
     char *encoded_query = NULL;
     char search_url[1024];
     response_buffer response = {0};
+    YouTubeApiContents *youtubeContents = NULL;
 
     if (curl == NULL) {
         fprintf(stderr, "curlの初期化に失敗しました\n");
@@ -297,15 +420,34 @@ char *getYoutubeContents(const char *keyword)
     if (!fetch_youtube_api_data("YouTube Search", search_url, &response)) {
         curl_free(encoded_query);
         curl_easy_cleanup(curl);
+        free(response.buffer);
         return NULL;
     }
 
     curl_free(encoded_query);
     curl_easy_cleanup(curl);
 
-    //動画IDとチャンネル登録IDをもとに再生数、高評価数、コメント数、再生時間、チャンネル登録者数を取得する
-    if (response.buffer != NULL && response.buffer[0] != '\0')
-    {
+    // 検索結果をまとめた構造体を作成する
+    youtubeContents = calloc(1, sizeof(YouTubeApiContents));
+    if (youtubeContents == NULL) {
+        free(response.buffer);
+        return NULL;
+    }
+
+    // 検索結果のJSON文字列をコピーして、後で free() できる一時バッファを解放する
+    youtubeContents->search_json = duplicate_string(response.buffer);
+    if (youtubeContents->search_json == NULL) {
+        free(response.buffer);
+        free(youtubeContents);
+        return NULL;
+    }
+
+
+    free(response.buffer);
+    response.buffer = NULL;
+
+    // 再生数、高評価数、コメント数、再生時間、チャンネル登録者数を取得するために、動画IDとチャンネルIDを抽出してAPIを呼び出す
+    if (youtubeContents->search_json != NULL && youtubeContents->search_json[0] != '\0') {
         char video_ids[4096] = {0};
         char channel_ids[4096] = {0};
         char stats_url[900];
@@ -315,48 +457,79 @@ char *getYoutubeContents(const char *keyword)
         response_buffer content_response = {0};
         response_buffer channel_response = {0};
 
-        extract_video_ids(response.buffer, video_ids, sizeof(video_ids));
-        if (video_ids[0] == '\0') {
-            fprintf(stderr, "動画IDの抽出に失敗しました\n");
-            return response.buffer;
-        }
+        extract_video_ids(youtubeContents->search_json, video_ids, sizeof(video_ids));
+        extract_channel_ids(youtubeContents->search_json, channel_ids, sizeof(channel_ids));
 
-        extract_channel_ids(response.buffer, channel_ids, sizeof(channel_ids));
+        if (video_ids[0] != '\0') {
+            snprintf(stats_url, sizeof(stats_url),
+                     "%s/videos?part=statistics&id=%s&key=%s&fields=items(id,statistics(viewCount,likeCount,commentCount))",
+                     YOUTUBE_API_DOMAIN, video_ids, api_key);
 
-        snprintf(stats_url, sizeof(stats_url),
-                 "%s/videos?part=statistics&id=%s&key=%s&fields=items(id,statistics(viewCount,likeCount,commentCount))",
-                 YOUTUBE_API_DOMAIN, video_ids, api_key);
-        if (fetch_youtube_api_data("YouTube Statistics", stats_url, &stats_response)) {
-            fprintf(stdout, "[YouTube Video Statistics]\n%s\n",
-                    stats_response.buffer);
-            fflush(stdout);
-            free(stats_response.buffer);
-        }
+            // 再生数、高評価数、コメント数を取得するために、YouTube APIを呼び出す         
+            if (fetch_youtube_api_data("YouTube Statistics", stats_url, &stats_response)) {
+                youtubeContents->stats_json = duplicate_string(stats_response.buffer);
+                free(stats_response.buffer);
+            }
 
-        snprintf(content_url, sizeof(content_url),
-                 "%s/videos?part=contentDetails&id=%s&key=%s&fields=items(id,contentDetails(duration))",
-                 YOUTUBE_API_DOMAIN, video_ids, api_key);
-        if (fetch_youtube_api_data("YouTube Content Details", content_url, &content_response)) {
-            fprintf(stdout, "[YouTube Video Content Details]\n%s\n",
-                    content_response.buffer);
-            fflush(stdout);
-            free(content_response.buffer);
+            snprintf(content_url, sizeof(content_url),
+                     "%s/videos?part=contentDetails&id=%s&key=%s&fields=items(id,contentDetails(duration))",
+                     YOUTUBE_API_DOMAIN, video_ids, api_key);
+
+            // 再生時間を取得するために、YouTube APIを呼び出す            
+            if (fetch_youtube_api_data("YouTube Content Details", content_url, &content_response)) {
+                youtubeContents->content_json = duplicate_string(content_response.buffer);
+                free(content_response.buffer);
+            }
         }
 
         if (channel_ids[0] != '\0') {
             snprintf(channel_url, sizeof(channel_url),
                      "%s/channels?part=statistics&id=%s&key=%s&fields=items(id,statistics(subscriberCount,videoCount,viewCount))",
                      YOUTUBE_API_DOMAIN, channel_ids, api_key);
+
+            // チャンネル登録者数を取得するために、YouTube APIを呼び出す         
             if (fetch_youtube_api_data("YouTube Channel Statistics", channel_url, &channel_response)) {
-                fprintf(stdout, "[YouTube Channel Statistics]\n%s\n",
-                        channel_response.buffer);
-                fflush(stdout);
+                youtubeContents->channel_json = duplicate_string(channel_response.buffer);
                 free(channel_response.buffer);
             }
         }
     }
 
-    return response.buffer;
+    return youtubeContents;
+}
+
+/*
+ * まとめた結果を解放する.
+ */
+void freeYoutubeApiContents(YouTubeApiContents *contents)
+{
+    if (contents == NULL) {
+        return;
+    }
+
+    free(contents->search_json);
+    free(contents->stats_json);
+    free(contents->content_json);
+    free(contents->channel_json);
+    free(contents);
+}
+
+/*
+ * API検索して、整形済みのJSON文字列を返す.
+ * 呼び出し元は free() で解放する必要がある.
+ */
+char *getFormattedYoutubeContents(const char *keyword)
+{
+    YouTubeApiContents *contents = getYoutubeContents(keyword);
+    char *combined_json = NULL;
+
+    if (contents == NULL) {
+        return NULL;
+    }
+
+    combined_json = build_aggregate_json(contents);
+    freeYoutubeApiContents(contents);
+    return combined_json;
 }
 
 /*
