@@ -15,14 +15,20 @@
  */
 static int send_all(SOCKET client_socket, const char *data, int length)
 {
+    // これまでに送った合計バイト数
     int total_sent = 0;
 
+    // すべてのデータが送信されるまでループする
     while (total_sent < length) {
+        // 実際にソケットに送信する
+        // sentは送信したバイト数を返す
+        // 送信先のソケット, 送信するデータの開始位置, 残っている送信サイズ
         int sent = send(client_socket, data + total_sent,
                         length - total_sent, 0);
         if (sent == SOCKET_ERROR) {
             return 0;
         }
+        // 送信したバイト数を合計に加算する
         total_sent += sent;
     }
 
@@ -31,8 +37,14 @@ static int send_all(SOCKET client_socket, const char *data, int length)
 
 static int send_chunk(void *context, const char *data, size_t length)
 {
+    // contextはSOCKET型のポインタとして渡されるので、SOCKET型にキャストする必要がある
     SOCKET client_socket = *(SOCKET *)context;
+
+    // headerを32のサイズとして確保する
+    // TODO: 32のサイズで十分かどうかを検討する必要がある
     char header[32];
+
+    // lengthを16進数に変換してheaderに格納する(しかし、headerのサイズを超えないようにする)
     int header_length = snprintf(header, sizeof(header), "%zx\r\n", length);
 
     return send_all(client_socket, header, header_length) &&
@@ -40,13 +52,83 @@ static int send_chunk(void *context, const char *data, size_t length)
            send_all(client_socket, "\r\n", 2);
 }
 
+/*
+ * keyworのエンコードを正式な文字列に変更する
+ */
+static const char *extract_keyword_from_request(const char *request,
+                                               char *buffer,
+                                               size_t buffer_size)
+{
+    const char *question_mark;
+    const char *key_pos;
+    const char *value_start;
+    const char *value_end;
+    size_t out = 0;
+    size_t i;
+
+    if (buffer == NULL || buffer_size == 0) {
+        return NULL;
+    }
+
+    question_mark = strchr(request, '?');
+    if (question_mark == NULL) {
+        return NULL;
+    }
+
+    key_pos = strstr(question_mark + 1, "keyword=");
+    if (key_pos == NULL) {
+        return NULL;
+    }
+
+    value_start = key_pos + strlen("keyword=");
+    value_end = value_start;
+    while (*value_end != '\0' && *value_end != '&' && *value_end != ' ') {
+        value_end++;
+    }
+
+    for (i = 0; value_start + i < value_end && out + 1 < buffer_size; i++) {
+        unsigned char ch = (unsigned char)value_start[i];
+
+        if (ch == '+') {
+            buffer[out++] = ' ';
+        } else if (ch == '%' && value_start + i + 2 < value_end) {
+            char hex[3];
+            char *endptr = NULL;
+            long code;
+
+            hex[0] = value_start[i + 1];
+            hex[1] = value_start[i + 2];
+            hex[2] = '\0';
+            code = strtol(hex, &endptr, 16);
+            if (endptr != NULL && *endptr == '\0') {
+                buffer[out++] = (char)code;
+                i += 2;
+            } else {
+                buffer[out++] = (char)ch;
+            }
+        } else {
+            buffer[out++] = (char)ch;
+        }
+    }
+
+    buffer[out] = '\0';
+    return buffer;
+}
+
+/*
+ * index.htmlから1文字ずつ読み取り、ブラウザで送信している.
+ 
+ */
 static int send_template(FILE *html_file, SOCKET client_socket,
-                         const char *request, const char *message)
+                         const char *request, const char *message,
+                         const char *keyword)
 {
     static const char api_placeholder[] = "{{api_res_data}}";
     static const char message_placeholder[] = "{{message}}";
     char candidate[32];
     int current;
+
+    (void)request;
 
     while ((current = fgetc(html_file)) != EOF) {
         if (current != '{') {
@@ -71,7 +153,10 @@ static int send_template(FILE *html_file, SOCKET client_socket,
         candidate[candidate_length] = '\0';
 
         if (strcmp(candidate, api_placeholder) == 0 && message != NULL) {
-            if (!get_searchResults(request, send_chunk, &client_socket)) {
+            if (keyword == NULL || keyword[0] == '\0') {
+                return 0;
+            }
+            if (!getYoutubeContents(keyword, send_chunk, &client_socket)) {
                 return 0;
             }
         } else if (strcmp(candidate, message_placeholder) != 0 &&
@@ -140,6 +225,9 @@ int main(void)
         }
         request[request_length] = '\0';
 
+        char keyword[40] = {0};
+        extract_keyword_from_request(request, keyword, sizeof(keyword));
+
         const char *file_name = "index.html";
         const char *content_type = "text/html; charset=UTF-8";
         const char *search_message = NULL;
@@ -186,7 +274,7 @@ int main(void)
 
         if (!send_all(client_socket, response, header_length) ||
             !send_template(html_file, client_socket, request,
-                           search_message)) {
+                           search_message, keyword)) {
             fprintf(stderr, "Failed to send the HTTP response.\n");
         }
 

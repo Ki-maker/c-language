@@ -9,8 +9,15 @@
 
 #include "search.h"
 
-#define BUFFER_API_RESPONSE 256
+// TODO このメモリサイズは元に戻す
+#define BUFFER_API_RESPONSE 2560
 #define BUFFER_END 1
+
+#define YOUTUBE_API_DOMAIN "https://www.googleapis.com/youtube/v3"
+#define YOUTUBE_SEARCH_PATH "/search"
+#define YOUTUBE_SEARCH_QUERY_FORMAT \
+    "?part=snippet&q=%s&type=video&maxResults=%d&key=%s"
+#define MAX_SEARCH_RESULTS 50
 
 typedef struct {
     char api_response[BUFFER_API_RESPONSE + BUFFER_END];
@@ -81,17 +88,17 @@ const char *handle_search_request(const char *request)
     return NULL;
 }
 
-int get_searchResults(const char *request, response_writer writer,
-                      void *writer_context) {
-    (void)request;
-    // 検索結果を取得する処理をここに実装する
-
+/*
+ * API検索して、OpenSearchにデータを入れる処理を行う.
+ * Returns the message 検索結果, NULL 検索に失敗.
+ */
+int getYoutubeContents(const char *keyword, response_writer writer,
+                      void *writer_context)
+{
     // API呼び出しの初期設定
     // 通信の準備をする関数の設定
-    CURL *curl = curl_easy_init(); 
-    // APIキーを設定する
-    // TODO: シークレットマネージャーから取得するように変更する
-    const char *api_key = "AIzaSyByOFozBXw56klm9CuXvBqo2iwzSi6HB8k";
+    CURL *curl = curl_easy_init();
+    const char *api_key = getenv("YOUTUBE_API_KEY");
     char *encoded_query;
     char url[1024];
 
@@ -100,6 +107,11 @@ int get_searchResults(const char *request, response_writer writer,
         return 0;
     }
 
+    if (keyword == NULL || keyword[0] == '\0') {
+        fprintf(stderr, "検索キーワードが空です\n");
+        curl_easy_cleanup(curl);
+        return 0;
+    }
 
     response_context context = {
         .response_length = 0, // APIレスポンスの長さを初期化
@@ -109,14 +121,15 @@ int get_searchResults(const char *request, response_writer writer,
     };
 
     if (api_key == NULL || api_key[0] == '\0') {
-        fprintf(stderr, "YOUTUBE_API_KEYが設定されていません\n");
+        fprintf(stderr,
+                "YOUTUBE_API_KEYが設定されていません。Fargate では ECS secret から注入してください\n");
         curl_easy_cleanup(curl);
         return 0;
     }
 
     // 検索文字列をURLの使える形に変更する
     // 第三引数の0は'\0'まで自動判定
-    encoded_query = curl_easy_escape(curl, "劇⽯中毒", 0);
+    encoded_query = curl_easy_escape(curl, keyword, 0);
     if (encoded_query == NULL) {
         fprintf(stderr, "検索語のURLエンコードに失敗しました\n");
         curl_easy_cleanup(curl);
@@ -125,14 +138,12 @@ int get_searchResults(const char *request, response_writer writer,
 
     // URLをセットする
     // snprintf(書き込み先, 最大サイズ, 書式, 値1, 値2);
-    snprintf(url, sizeof(url),
-    "https://www.googleapis.com/youtube/v3/search"
-    "?part=snippet&q=%s&type=video&maxResults=50&key=%s",
-    encoded_query, api_key);
+    snprintf(url, sizeof(url), "%s%s" YOUTUBE_SEARCH_QUERY_FORMAT,
+             YOUTUBE_API_DOMAIN, YOUTUBE_SEARCH_PATH,
+             encoded_query, MAX_SEARCH_RESULTS, api_key);
 
     // CURLOPT_URLはどこで通信するのかを決める
-    curl_easy_setopt(curl, CURLOPT_URL,
-    url);
+    curl_easy_setopt(curl, CURLOPT_URL, url);
 
     // レスポンスを標準出力に書き込むためのコールバック関数を設定する
     //レスポンスデータはwrite_callback関数で処理される
@@ -148,15 +159,15 @@ int get_searchResults(const char *request, response_writer writer,
 
     if (result != CURLE_OK) {
         fprintf(stderr, "通信エラー: %s\n",
-            curl_easy_strerror(result));
+                curl_easy_strerror(result));
         curl_free(encoded_query);
         curl_easy_cleanup(curl);
         return 0;
-        }
+    }
 
-// メモ：libcurlが管理するデータはメモリ開放する必要がある
-curl_free(encoded_query);
-// ibcurlが作成したCURL専用のデータを解放する関数(freeと同じ意味)
-curl_easy_cleanup(curl);
-return 1;
+    // メモ：libcurlが管理するデータはメモリ開放する必要がある
+    curl_free(encoded_query);
+    // ibcurlが作成したCURL専用のデータを解放する関数(freeと同じ意味)
+    curl_easy_cleanup(curl);
+    return 1;
 }
