@@ -25,6 +25,61 @@ typedef struct {
     size_t capacity;
 } response_buffer;
 
+static size_t write_callback(void *contents, size_t size,
+                             size_t count, void *body_data);
+/*
+ * YouTube APIからデータを取得する.
+ * 1: 成功, 0: 失敗
+ */
+static int fetch_youtube_api_data(const char *label,
+                                  const char *url,
+                                  response_buffer *response)
+{
+    CURL *curl = curl_easy_init();
+    CURLcode result_code;
+
+    if (curl == NULL) {
+        fprintf(stderr, "%s の初期化に失敗しました\n", label);
+        return 0;
+    }
+
+    if (response == NULL || url == NULL || url[0] == '\0') {
+        curl_easy_cleanup(curl);
+        return 0;
+    }
+
+    response->buffer = malloc(BUFFER_API_RESPONSE + BUFFER_END);
+    if (response->buffer == NULL) {
+        fprintf(stderr, "%s のバッファ確保に失敗しました\n", label);
+        curl_easy_cleanup(curl);
+        return 0;
+    }
+
+    response->buffer[0] = '\0';
+    response->length = 0;
+    response->capacity = BUFFER_API_RESPONSE + BUFFER_END;
+
+    fprintf(stdout, "[%s API URL]\n%s\n", label, url);
+    fflush(stdout);
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
+
+    result_code = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+
+    if (result_code != CURLE_OK || response->buffer == NULL ||
+        response->buffer[0] == '\0') {
+        fprintf(stderr, "%s の取得に失敗しました\n", label);
+        free(response->buffer);
+        response->buffer = NULL;
+        return 0;
+    }
+
+    return 1;
+}
+
 /*
  * 動画IDをJSONレスポンスから抽出する.
  * 
@@ -40,6 +95,59 @@ static void extract_video_ids(const char *json, char *out, size_t out_size)
     }
 
     while ((cursor = strstr(cursor, "\"videoId\"")) != NULL) {
+        const char *value_start;
+        const char *value_end;
+
+        cursor = strchr(cursor, ':');
+        if (cursor == NULL) {
+            break;
+        }
+        cursor++;
+
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == '\n' ||
+               *cursor == '\r') {
+            cursor++;
+        }
+
+        if (*cursor != '"') {
+            continue;
+        }
+        cursor++;
+        value_start = cursor;
+        value_end = strchr(value_start, '"');
+        if (value_end == NULL) {
+            break;
+        }
+
+        if (out_len > 0 && out_len + 1 < out_size) {
+            out[out_len++] = ',';
+        }
+
+        if (out_len + (size_t)(value_end - value_start) + 1 < out_size) {
+            memcpy(out + out_len, value_start,
+                   (size_t)(value_end - value_start));
+            out_len += (size_t)(value_end - value_start);
+            out[out_len] = '\0';
+        }
+
+        cursor = value_end + 1;
+    }
+}
+
+/*
+ * チャンネルIDをJSONレスポンスから抽出する.
+ */
+static void extract_channel_ids(const char *json, char *out, size_t out_size)
+{
+    const char *cursor = json;
+    size_t out_len = 0;
+
+    out[0] = '\0';
+    if (out_size == 0) {
+        return;
+    }
+
+    while ((cursor = strstr(cursor, "\"channelId\"")) != NULL) {
         const char *value_start;
         const char *value_end;
 
@@ -134,7 +242,7 @@ char *getYoutubeContents(const char *keyword)
     CURL *curl = curl_easy_init();
     const char *api_key = getenv("YOUTUBE_API_KEY");
     char *encoded_query = NULL;
-    char url[1024];
+    char search_url[1024];
     response_buffer response = {0};
 
     if (curl == NULL) {
@@ -173,44 +281,39 @@ char *getYoutubeContents(const char *keyword)
         return NULL;
     }
 
-    snprintf(url, sizeof(url), "%s%s" YOUTUBE_SEARCH_QUERY_FORMAT,
+    snprintf(search_url, sizeof(search_url), "%s%s" YOUTUBE_SEARCH_QUERY_FORMAT,
              YOUTUBE_API_DOMAIN, YOUTUBE_SEARCH_PATH,
              encoded_query, MAX_SEARCH_RESULTS, api_key);
 
-    fprintf(stdout, "[YouTube Search API URL]\n%s\n", url);
-    fflush(stdout);
+    if (strlen(search_url) >= sizeof(search_url)) {
+        fprintf(stderr, "検索URLがバッファサイズを超えました\n");
+        curl_free(encoded_query);
+        curl_easy_cleanup(curl);
+        free(response.buffer);
+        return NULL;
+    }
 
-    // API を呼ぶ前に、レスポンスの受け取り方や保存先を先に設定する
-    // CURLOPT_URL = URLを設定する
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    // CURLOPT_WRITEFUNCTION = レスポンスを受け取るコールバック関数
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    // CURLOPT_WRITEDATA = コールバック関数に渡すデータ
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    // YouTube APIから検索結果を取得する
+    if (!fetch_youtube_api_data("YouTube Search", search_url, &response)) {
+        curl_free(encoded_query);
+        curl_easy_cleanup(curl);
+        return NULL;
+    }
 
-    CURLcode result_code = curl_easy_perform(curl);
     curl_free(encoded_query);
     curl_easy_cleanup(curl);
 
-    if (result_code != CURLE_OK) {
-        fprintf(stderr, "通信エラー: %s\n",
-                curl_easy_strerror(result_code));
-        free(response.buffer);
-        return NULL;
-    }
-
-    if (response.buffer == NULL || response.buffer[0] == '\0') {
-        free(response.buffer);
-        return NULL;
-    }
-
-    //動画IDをもとに再生数、高評価数、コメント数を取得する
+    //動画IDとチャンネル登録IDをもとに再生数、高評価数、コメント数、再生時間、チャンネル登録者数を取得する
     if (response.buffer != NULL && response.buffer[0] != '\0')
     {
         char video_ids[4096] = {0};
-        CURL *stats_curl = curl_easy_init();
+        char channel_ids[4096] = {0};
         char stats_url[900];
+        char content_url[900];
+        char channel_url[2000];
         response_buffer stats_response = {0};
+        response_buffer content_response = {0};
+        response_buffer channel_response = {0};
 
         extract_video_ids(response.buffer, video_ids, sizeof(video_ids));
         if (video_ids[0] == '\0') {
@@ -218,43 +321,37 @@ char *getYoutubeContents(const char *keyword)
             return response.buffer;
         }
 
-        if (stats_curl != NULL) {
-            stats_response.buffer = malloc(BUFFER_API_RESPONSE + BUFFER_END);
-            if (stats_response.buffer != NULL) {
-                stats_response.buffer[0] = '\0';
-                stats_response.length = 0;
-                stats_response.capacity = BUFFER_API_RESPONSE + BUFFER_END;
+        extract_channel_ids(response.buffer, channel_ids, sizeof(channel_ids));
 
-                snprintf(stats_url, sizeof(stats_url),
-                         "%s/videos?part=statistics&id=%s&fields=items(id,statistics(viewCount,likeCount,commentCount))&key=%s",
-                         YOUTUBE_API_DOMAIN, video_ids, api_key);
+        snprintf(stats_url, sizeof(stats_url),
+                 "%s/videos?part=statistics&id=%s&key=%s&fields=items(id,statistics(viewCount,likeCount,commentCount))",
+                 YOUTUBE_API_DOMAIN, video_ids, api_key);
+        if (fetch_youtube_api_data("YouTube Statistics", stats_url, &stats_response)) {
+            fprintf(stdout, "[YouTube Video Statistics]\n%s\n",
+                    stats_response.buffer);
+            fflush(stdout);
+            free(stats_response.buffer);
+        }
 
-                fprintf(stdout, "[YouTube Statistics API URL]\n%s\n",
-                        stats_url);
+        snprintf(content_url, sizeof(content_url),
+                 "%s/videos?part=contentDetails&id=%s&key=%s&fields=items(id,contentDetails(duration))",
+                 YOUTUBE_API_DOMAIN, video_ids, api_key);
+        if (fetch_youtube_api_data("YouTube Content Details", content_url, &content_response)) {
+            fprintf(stdout, "[YouTube Video Content Details]\n%s\n",
+                    content_response.buffer);
+            fflush(stdout);
+            free(content_response.buffer);
+        }
+
+        if (channel_ids[0] != '\0') {
+            snprintf(channel_url, sizeof(channel_url),
+                     "%s/channels?part=statistics&id=%s&key=%s&fields=items(id,statistics(subscriberCount,videoCount,viewCount))",
+                     YOUTUBE_API_DOMAIN, channel_ids, api_key);
+            if (fetch_youtube_api_data("YouTube Channel Statistics", channel_url, &channel_response)) {
+                fprintf(stdout, "[YouTube Channel Statistics]\n%s\n",
+                        channel_response.buffer);
                 fflush(stdout);
-
-                curl_easy_setopt(stats_curl, CURLOPT_URL, stats_url);
-                curl_easy_setopt(stats_curl, CURLOPT_WRITEFUNCTION,
-                                 write_callback);
-                curl_easy_setopt(stats_curl, CURLOPT_WRITEDATA,
-                                 &stats_response);
-
-                CURLcode stats_result = curl_easy_perform(stats_curl);
-                curl_easy_cleanup(stats_curl);
-
-                if (stats_result == CURLE_OK && stats_response.buffer != NULL &&
-                    stats_response.buffer[0] != '\0') {
-                    fprintf(stdout, "[YouTube Video Statistics]\n%s\n",
-                            stats_response.buffer);
-                    fflush(stdout);
-                } else {
-                    fprintf(stderr, "動画統計APIの取得に失敗しました\n");
-                }
-
-                free(stats_response.buffer);
-            } else {
-                curl_easy_cleanup(stats_curl);
-                fprintf(stderr, "動画統計のバッファ確保に失敗しました\n");
+                free(channel_response.buffer);
             }
         }
     }
