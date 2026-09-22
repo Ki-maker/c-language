@@ -11,6 +11,8 @@
                 "*.c",
                 "-o",
                 "${workspaceFolder}\\main.exe",
+                "-lcurl",
+                "-lcjson",
                 "-lws2_32"
             ],
             "options": {

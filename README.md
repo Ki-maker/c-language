@@ -31,7 +31,7 @@ C ファイルを追加しても、ビルドコマンドの変更は不要です
 現在の `MSYS` ターミナルをそのまま使う場合は、GCC の絶対パスを指定します。
 
 ```bash
-/c/msys64/ucrt64/bin/gcc.exe main.c -o main.exe -lws2_32
+/c/msys64/ucrt64/bin/gcc.exe main.c router/router.c search/search.c -o main.exe -lcurl -lcjson -lws2_32
 ```
 
 または、VS Code の「タスクの実行」から `C: すべての C ファイルをビルド` を選びます。
@@ -40,7 +40,7 @@ C ファイルを追加しても、ビルドコマンドの変更は不要です
 フォルダー内の C ファイルをまとめてビルドできます。
 
 ```bash
-gcc *.c -o main.exe -lws2_32
+gcc main.c router/router.c search/search.c -o main.exe -lcurl -lcjson -lws2_32
 ```
 
 ### 起動
@@ -60,7 +60,7 @@ PowerShell では次のように起動します。
 PowerShell からビルドする場合は、GCC の場所を指定できます。
 
 ```powershell
-& "C:\msys64\ucrt64\bin\gcc.exe" main.c search.c -o main.exe -lws2_32
+& "C:\msys64\ucrt64\bin\gcc.exe" main.c router/router.c search/search.c -o main.exe -lcurl -lcjson -lws2_32
 ```
 
 表示されたらブラウザで次の URL を開きます。

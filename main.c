@@ -3,7 +3,12 @@
 #include <string.h>
 #include <winsock2.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "router.h"
+#include "search.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -153,23 +158,62 @@ static int send_template(FILE *html_file, SOCKET client_socket,
         candidate[candidate_length] = '\0';
 
         if (strcmp(candidate, api_placeholder) == 0) {
+            YouTubeApiContentsList *contents = NULL;
             char *api_result = NULL;
 
             if (keyword == NULL || keyword[0] == '\0') {
                 continue;
             }
 
-            // API検索して、整形済みのJSON文字列を返す.
-            api_result = getFormattedYoutubeContents(keyword);
+            // API検索して構造体リストを取得し、JSON文字列へ変換する.
+            contents = getYoutubeContents(keyword);
+            if (contents == NULL) {
+                return 0;
+            }
+            fprintf(stdout, "[YouTube contents] count=%zu\n", contents->count);
+            for (size_t index = 0; index < contents->count; index++) {
+                YouTubeApiContents *item = &contents->items[index];
+                fprintf(stdout,
+                    "[%zu]\n"
+                    "  videoId=%s\n"
+                    "  channelId=%s\n"
+                    "  title=%s\n"
+                    "  channelName=%s\n"
+                    "  imageLarge=%s\n"
+                    "  imageMiddle=%s\n"
+                    "  publishedAt=%s\n"
+                    "  viewCount=%lld\n"
+                    "  likeCount=%lld\n"
+                    "  commentCount=%lld\n"
+                    "  videoTime=%s\n"
+                    "  subscriberCount=%lld\n",
+                        index,
+                        item->videoId == NULL ? "" : item->videoId,
+                    item->channelId == NULL ? "" : item->channelId,
+                        item->title == NULL ? "" : item->title,
+                    item->channelName == NULL ? "" : item->channelName,
+                    item->imageLarge == NULL ? "" : item->imageLarge,
+                    item->imageMiddle == NULL ? "" : item->imageMiddle,
+                    item->publishedAt == NULL ? "" : item->publishedAt,
+                    item->viewCount,
+                    item->likeCount,
+                    item->commentCount,
+                    item->videoTime == NULL ? "" : item->videoTime,
+                    item->subscriberCount);
+            }
+            fflush(stdout);
+
+            api_result = getFormattedYoutubeContents(contents);
             if (api_result == NULL) {
+                freeYoutubeApiContents(contents);
                 return 0;
             }
 
-            fprintf(stdout, "[YouTube JSON]\n%s\n", api_result);
-            fflush(stdout);
 
             if(api_result == NULL || strlen(api_result) == 0) {
                 fprintf(stderr, "APIレスポンスが空です\n");
+                free(api_result);
+                freeYoutubeApiContents(contents);
                 return 0;
             }
 
@@ -178,10 +222,12 @@ static int send_template(FILE *html_file, SOCKET client_socket,
 
             if (!send_chunk(&client_socket, api_result, strlen(api_result))) {
                 free(api_result);
+                freeYoutubeApiContents(contents);
                 return 0;
             }
 
             free(api_result);
+            freeYoutubeApiContents(contents);
         } else if (strcmp(candidate, message_placeholder) == 0) {
             if (message != NULL &&
                 !send_chunk(&client_socket, message, (int)strlen(message))) {
@@ -206,6 +252,10 @@ int main(void)
     struct sockaddr_in server_address;
     char request[4096];
     char response[512];
+
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
 
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
         fprintf(stderr, "Failed to initialize Winsock.\n");
