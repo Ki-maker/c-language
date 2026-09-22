@@ -11,13 +11,13 @@
 #include "search.h"
 
 // TODO このメモリサイズは元に戻す
-#define BUFFER_API_RESPONSE 30000
+#define BUFFER_API_RESPONSE 35000
 #define BUFFER_END 1
 
 #define YOUTUBE_API_DOMAIN "https://www.googleapis.com/youtube/v3"
 #define YOUTUBE_SEARCH_PATH "/search"
 #define YOUTUBE_SEARCH_QUERY_FORMAT \
-    "?part=snippet&q=%s&type=video&maxResults=%d&fields=items(id/videoId,snippet/title,snippet/channelId,snippet/channelTitle,snippet/publishedAt,snippet/thumbnails/medium/url,snippet/thumbnails/high/url)&key=%s"
+    "?part=snippet&q=%s&type=video&maxResults=%d&fields=items(id/kind,id/videoId,snippet/title,snippet/channelId,snippet/channelTitle,snippet/publishedAt,snippet/thumbnails/medium/url,snippet/thumbnails/high/url)&key=%s"
 #define MAX_SEARCH_RESULTS 50
 
 typedef struct {
@@ -257,7 +257,7 @@ YouTubeApiContentsList *getYoutubeContents(const char *keyword)
     CURL *curl = curl_easy_init();
     const char *api_key = getenv("YOUTUBE_API_KEY");
     char *encoded_query = NULL;
-    char search_url[1024];
+    char search_url[1052];
     response_buffer response = {0};
     YouTubeApiContentsList *youtubeContents = NULL;
 
@@ -317,6 +317,8 @@ YouTubeApiContentsList *getYoutubeContents(const char *keyword)
         char video_ids[4096] = {0};
         char channel_ids[4096] = {0};
         size_t index;
+        cJSON *search_item;
+        int item_index;
 
         if (search_root == NULL) {
             free(response.buffer);
@@ -332,6 +334,20 @@ YouTubeApiContentsList *getYoutubeContents(const char *keyword)
             return NULL;
         }
 
+        // youtube#video以外の項目を検索配列から削除する
+        for (item_index = cJSON_GetArraySize(search_items) - 1;
+             item_index >= 0;
+             item_index--) {
+            search_item = cJSON_GetArrayItem(search_items, item_index);
+            cJSON *search_id = cJSON_GetObjectItemCaseSensitive(search_item, "id");
+            cJSON *kind = cJSON_GetObjectItemCaseSensitive(search_id, "kind");
+
+            if (!cJSON_IsString(kind) ||
+                strcmp(kind->valuestring, "youtube#video") != 0) {
+                cJSON_DeleteItemFromArray(search_items, item_index);
+            }
+        }
+
         youtubeContents->count = (size_t)cJSON_GetArraySize(search_items);
         youtubeContents->items = calloc(youtubeContents->count,
                                          sizeof(*youtubeContents->items));
@@ -342,9 +358,9 @@ YouTubeApiContentsList *getYoutubeContents(const char *keyword)
             return NULL;
         }
 
-        // 再生数、コメント数などの情報をobjectに格納する
+        // 再生数、コメント数などの情報を動画objectに格納する
         for (index = 0; index < youtubeContents->count; index++) {
-            cJSON *search_item = cJSON_GetArrayItem(search_items, (int)index);
+            search_item = cJSON_GetArrayItem(search_items, (int)index);
             cJSON *search_id = cJSON_GetObjectItemCaseSensitive(search_item, "id");
             cJSON *snippet = cJSON_GetObjectItemCaseSensitive(search_item, "snippet");
             cJSON *thumbnails = cJSON_GetObjectItemCaseSensitive(snippet, "thumbnails");
