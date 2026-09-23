@@ -3,7 +3,7 @@ CFLAGS = -Wall -Wextra -g
 CPPFLAGS = -Irouter -Isearch
 LDLIBS = -lcurl -lcjson -lws2_32
 TARGET = main.exe
-SOURCES = $(wildcard *.c router/*.c search/*.c)
+SOURCES = $(wildcard *.c ingestion/*.c router/*.c search/*.c)
 
 .PHONY: all clean
 

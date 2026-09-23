@@ -521,13 +521,3 @@ char *getFormattedYoutubeContents(const YouTubeApiContentsList *contents)
 
     return build_aggregate_json(contents);
 }
-
-/*
- * APIのデータをOpenSearchに登録する.
- * 1: 成功, 0: 失敗
- */
-int setYoutubeContentsToOpenSearch(const char *keyword) {
-    printf("OpenSearchにデータを登録します: %s\n", keyword);
-    fflush(stdout);
-    return 1;
-}

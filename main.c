@@ -203,6 +203,9 @@ static int send_template(FILE *html_file, SOCKET client_socket,
             }
             fflush(stdout);
 
+            // OpenSearchにデータを入れる処理を行う
+            setYoutubeContentsToOpenSearch(contents);
+
             api_result = getFormattedYoutubeContents(contents);
             if (api_result == NULL) {
                 freeYoutubeApiContents(contents);
@@ -217,8 +220,7 @@ static int send_template(FILE *html_file, SOCKET client_socket,
                 return 0;
             }
 
-            // OpenSearchにデータを入れる処理を行う
-            setYoutubeContentsToOpenSearch(keyword);
+            
 
             if (!send_chunk(&client_socket, api_result, strlen(api_result))) {
                 free(api_result);

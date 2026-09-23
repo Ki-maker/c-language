@@ -34,12 +34,6 @@ typedef struct {
 char *getFormattedYoutubeContents(const YouTubeApiContentsList *contents);
 
 /*
- * YouTube検索結果を OpenSearch に登録する.
- * 1: 成功, 0: 失敗
- */
-int setYoutubeContentsToOpenSearch(const char *keyword);
-
-/*
  * API検索して、取得した構造をまとめて返す.
  * main.c から呼び出される.
  */
