@@ -43,6 +43,18 @@ C ファイルを追加しても、ビルドコマンドの変更は不要です
 gcc main.c router/router.c search/search.c -o main.exe -lcurl -lcjson -lws2_32
 ```
 
+### OpenSearchへの登録
+
+動画データは `OPENSEARCH_URL` の `/{index}/_bulk` にNDJSON形式で登録します。
+
+一時的なAWS認証情報では `AWS_SESSION_TOKEN` も設定してください。
+OpenSearch Serverlessでは `OPENSEARCH_SERVICE` に `aoss` を設定します。
+`OPENSEARCH_URL` の既定値は上記AWS endpointです。ローカルOpenSearchを使う場合は `http://localhost:9200` に上書きしてください。
+ECSではTask Roleを設定すると、アプリがECS認証情報エンドポイントから一時認証情報を取得します。
+Task Roleには対象OpenSearchへの必要なアクセス権限を付与してください。ECSタスクへアクセスキーをSecretsとして渡す必要はありません。
+明示的なアクセスキーがないローカル環境では、署名せずに送信するため、ローカル開発用OpenSearchで利用できます。
+認証情報をソースコードやリポジトリに保存しないでください。
+
 ### 起動
 
 MSYS2 の Bash では、ビルドと起動を別々の行で実行します。

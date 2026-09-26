@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g
 CPPFLAGS = -Irouter -Isearch
-LDLIBS = -lcurl -lcjson -lws2_32
+LDLIBS = -lcurl -lcjson -lws2_32 -lbcrypt
 TARGET = main.exe
 SOURCES = $(wildcard *.c ingestion/*.c router/*.c search/*.c)
 

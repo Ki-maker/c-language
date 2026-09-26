@@ -9,8 +9,11 @@
 
 #include "router.h"
 #include "search.h"
+#include "ingestion/ingestion.h"
 
+#ifdef _MSC_VER
 #pragma comment(lib, "ws2_32.lib")
+#endif
 
 #define PORT 8080
 
