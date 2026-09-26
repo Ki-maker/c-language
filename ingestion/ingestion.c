@@ -275,7 +275,29 @@ static int parse_video_duration_seconds(const char *duration, long long *seconds
     return 1;
 }
 
-static int add_video_fields(cJSON *object, const YouTubeApiContents *video)
+static int format_utc_timestamp(char timestamp[25])
+{
+    SYSTEMTIME utc_time;
+    struct tm utc_tm;
+
+    GetSystemTime(&utc_time);
+    memset(&utc_tm, 0, sizeof(utc_tm));
+    utc_tm.tm_year = (int)utc_time.wYear - 1900;
+    utc_tm.tm_mon = (int)utc_time.wMonth - 1;
+    utc_tm.tm_mday = (int)utc_time.wDay;
+    utc_tm.tm_hour = (int)utc_time.wHour;
+    utc_tm.tm_min = (int)utc_time.wMinute;
+    utc_tm.tm_sec = (int)utc_time.wSecond;
+
+    if (strftime(timestamp, 20, "%Y-%m-%dT%H:%M:%S", &utc_tm) != 19) {
+        return 0;
+    }
+    snprintf(timestamp + 19, 6, ".%03uZ", (unsigned int)utc_time.wMilliseconds);
+    return 1;
+}
+
+static int add_video_fields(cJSON *object, const YouTubeApiContents *video,
+                            const char *inserted_at)
 {
     cJSON *image = cJSON_CreateObject();
     long long video_time_seconds = 0;
@@ -299,7 +321,8 @@ static int add_video_fields(cJSON *object, const YouTubeApiContents *video)
     }
 
     cJSON_AddItemToObject(object, "image", image);
-    return cJSON_AddStringToObject(object, "publishedAt", video->publishedAt == NULL ? "" : video->publishedAt) != NULL &&
+        return cJSON_AddStringToObject(object, "publishedAt", video->publishedAt == NULL ? "" : video->publishedAt) != NULL &&
+            cJSON_AddStringToObject(object, "insertedAt", inserted_at) != NULL &&
            cJSON_AddNumberToObject(object, "viewCount", (double)video->viewCount) != NULL &&
            cJSON_AddNumberToObject(object, "likeCount", (double)video->likeCount) != NULL &&
            cJSON_AddNumberToObject(object, "commentCount", (double)video->commentCount) != NULL &&
@@ -347,7 +370,8 @@ static size_t print_bulk_item_results(const cJSON *bulk_response,
 }
 
 static char *build_bulk_body(const YouTubeApiContentsList *contents,
-                             const char *index_name)
+                             const char *index_name,
+                             const char *inserted_at)
 {
     char *body = NULL;
     size_t body_length = 0;
@@ -370,7 +394,7 @@ static char *build_bulk_body(const YouTubeApiContentsList *contents,
             cJSON_AddStringToObject(metadata, "_index", index_name) == NULL ||
             (video->videoId != NULL && video->videoId[0] != '\0' &&
              cJSON_AddStringToObject(metadata, "_id", video->videoId) == NULL) ||
-            !add_video_fields(document, video)) {
+            !add_video_fields(document, video, inserted_at)) {
             cJSON_Delete(action);
             cJSON_Delete(metadata);
             cJSON_Delete(document);
@@ -679,6 +703,7 @@ int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents)
     char *body = NULL;
     char *authorization = NULL;
     char canonical_hash[SHA256_HEX_SIZE] = "";
+    char inserted_at[25];
     char timestamp[17];
     char date[9];
     SYSTEMTIME utc_time;
@@ -748,7 +773,11 @@ int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents)
              "%.*s/%s/_bulk", (int)base_length, opensearch_url, index_name);
 
     // bulkinsert用のリクエスト本文を作成
-    body = build_bulk_body(contents, index_name);
+    if (!format_utc_timestamp(inserted_at)) {
+        fprintf(stderr, "登録時刻を作成できませんでした\n");
+        goto cleanup;
+    }
+    body = build_bulk_body(contents, index_name, inserted_at);
     if (body == NULL) {
         fprintf(stderr, "OpenSearch用リクエスト本文の作成に失敗しました\n");
         goto cleanup;
