@@ -309,10 +309,14 @@ static int add_video_fields(cJSON *object, const YouTubeApiContents *video)
            cJSON_AddNumberToObject(object, "subscriberCount", (double)video->subscriberCount) != NULL;
 }
 
-static void print_bulk_item_errors(const cJSON *bulk_response)
+static size_t print_bulk_item_results(const cJSON *bulk_response,
+                                      size_t *total_count)
 {
     const cJSON *items = cJSON_GetObjectItemCaseSensitive(bulk_response, "items");
     const cJSON *item;
+    size_t failed_count = 0;
+
+    *total_count = (size_t)cJSON_GetArraySize(items);
 
     cJSON_ArrayForEach(item, items) {
         const cJSON *operation = item->child;
@@ -325,11 +329,12 @@ static void print_bulk_item_errors(const cJSON *bulk_response)
             continue;
         }
         error = cJSON_GetObjectItemCaseSensitive(operation, "error");
-        if (error == NULL) {
+        status = cJSON_GetObjectItemCaseSensitive(operation, "status");
+        if (error == NULL && (!cJSON_IsNumber(status) || status->valueint < 300)) {
             continue;
         }
+        failed_count++;
         document_id = cJSON_GetObjectItemCaseSensitive(operation, "_id");
-        status = cJSON_GetObjectItemCaseSensitive(operation, "status");
         reason = cJSON_GetObjectItemCaseSensitive(error, "reason");
         fprintf(stderr, "Bulk登録失敗: id=%s status=%d reason=%s\n",
                 cJSON_IsString(document_id) && document_id->valuestring != NULL
@@ -338,6 +343,7 @@ static void print_bulk_item_errors(const cJSON *bulk_response)
                 cJSON_IsString(reason) && reason->valuestring != NULL
                     ? reason->valuestring : "(詳細なし)");
     }
+    return failed_count;
 }
 
 static char *build_bulk_body(const YouTubeApiContentsList *contents,
@@ -736,8 +742,12 @@ int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents)
     if (request_url == NULL) {
         goto cleanup;
     }
+
+    // リクエストURLを作成
     snprintf(request_url, base_length + strlen(index_name) + sizeof("//_bulk"),
              "%.*s/%s/_bulk", (int)base_length, opensearch_url, index_name);
+
+    // bulkinsert用のリクエスト本文を作成
     body = build_bulk_body(contents, index_name);
     if (body == NULL) {
         fprintf(stderr, "OpenSearch用リクエスト本文の作成に失敗しました\n");
@@ -877,6 +887,7 @@ int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents)
     }
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
+    // OpenSearchへのリクエストを実行
     curl_result = curl_easy_perform(curl);
     if (curl_result == CURLE_OK) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
@@ -902,9 +913,19 @@ int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents)
     if (response.data != NULL) {
         cJSON *bulk_response = cJSON_Parse(response.data);
         const cJSON *errors = cJSON_GetObjectItemCaseSensitive(bulk_response, "errors");
-        if (cJSON_IsTrue(errors)) {
-            fprintf(stderr, "OpenSearch Bulk APIで一部のデータ登録に失敗しました\n");
-            print_bulk_item_errors(bulk_response);
+        if (cJSON_IsObject(bulk_response) && cJSON_IsArray(
+                cJSON_GetObjectItemCaseSensitive(bulk_response, "items"))) {
+            size_t total_count;
+            size_t failed_count = print_bulk_item_results(bulk_response, &total_count);
+            printf("Bulk登録結果: 全%zu件、成功%zu件、失敗%zu件\n",
+                   total_count, total_count - failed_count, failed_count);
+            if (cJSON_IsTrue(errors) || failed_count > 0) {
+                fprintf(stderr, "OpenSearch Bulk APIで一部のデータ登録に失敗しました\n");
+                cJSON_Delete(bulk_response);
+                goto cleanup;
+            }
+        } else {
+            fprintf(stderr, "OpenSearch Bulk APIの応答を解析できませんでした\n");
             cJSON_Delete(bulk_response);
             goto cleanup;
         }
