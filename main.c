@@ -16,6 +16,24 @@
 #endif
 
 #define PORT 8080
+#define CLEANUP_INTERVAL_MS (6UL * 60UL * 60UL * 1000UL)
+
+/*
+ * OpenSearchの古いデータを定期的に削除するスレッド関数.
+ * Returns 1 if all expired data was successfully deleted, 0 otherwise.
+ */
+static DWORD WINAPI periodic_cleanup_thread(LPVOID parameter)
+{
+    (void)parameter;
+
+    for (;;) {
+        if (!deleteExpiredYoutubeContentsFromOpenSearch()) {
+            fprintf(stderr, "24時間超過データの定期削除に失敗しました\n");
+        }
+        Sleep(CLEANUP_INTERVAL_MS);
+    }
+    return 0;
+}
 
 /*
  * すべてのデータを送信するためのヘルパー関数.
@@ -254,6 +272,7 @@ int main(void)
     WSADATA wsa_data;
     SOCKET server_socket;
     SOCKET client_socket;
+    HANDLE cleanup_thread;
     struct sockaddr_in server_address;
     char request[4096];
     char response[512];
@@ -291,6 +310,14 @@ int main(void)
     printf("Open http://localhost:%d/ in your browser.\n", PORT);
     printf("Press Ctrl+C in this window to stop the server.\n");
     fflush(stdout);
+
+    cleanup_thread = CreateThread(NULL, 0, periodic_cleanup_thread, NULL, 0, NULL);
+    if (cleanup_thread == NULL) {
+        fprintf(stderr, "24時間超過データの定期削除スレッドを開始できませんでした\n");
+    } else {
+        CloseHandle(cleanup_thread);
+        printf("24時間超過データを起動時と6時間ごとに削除します。\n");
+    }
 
     while (1) {
         client_socket = accept(server_socket, NULL, NULL);

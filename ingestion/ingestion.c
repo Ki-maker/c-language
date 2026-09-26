@@ -548,7 +548,8 @@ static void print_redacted_response(const char *response)
     }
 }
 
-static char *build_authorization(const char *host, const char *uri,
+static char *build_authorization(const char *method,
+                                 const char *host, const char *uri,
                                  const char *body, size_t body_length,
                                  const char *access_key, const char *secret_key,
                                  const char *region, const char *service,
@@ -600,18 +601,21 @@ static char *build_authorization(const char *host, const char *uri,
                  host, payload_hash, timestamp);
     }
 
-    length = snprintf(NULL, 0, "POST\n%s\n\n%s\n%s\n%s",
-                      uri, canonical_headers, signed_headers, payload_hash);
+    length = snprintf(NULL, 0, "%s\n%s\n\n%s\n%s\n%s",
+                      method, uri, canonical_headers, signed_headers, payload_hash);
     canonical_request = malloc((size_t)length + 1);
     if (canonical_request == NULL) {
         goto cleanup;
     }
-    snprintf(canonical_request, (size_t)length + 1, "POST\n%s\n\n%s\n%s\n%s",
-             uri, canonical_headers, signed_headers, payload_hash);
+    snprintf(canonical_request, (size_t)length + 1,
+             "%s\n%s\n\n%s\n%s\n%s",
+             method, uri, canonical_headers, signed_headers, payload_hash);
     if (!sha256_hex(canonical_request, strlen(canonical_request), canonical_hash)) {
         goto cleanup;
     }
-    memcpy(canonical_hash_output, canonical_hash, SHA256_HEX_SIZE);
+    if (canonical_hash_output != NULL) {
+        memcpy(canonical_hash_output, canonical_hash, SHA256_HEX_SIZE);
+    }
 
     length = snprintf(NULL, 0, "%s/%s/%s/aws4_request", date, region, service);
     scope = malloc((size_t)length + 1);
@@ -733,6 +737,10 @@ int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents)
         index_name = "youtube_search";
     }
     if (!valid_index_name(index_name)) {
+        fprintf(stderr, "定期削除: OPENSEARCH_INDEXが正しくありません\n");
+        return 0;
+    }
+    if (!valid_index_name(index_name)) {
         fprintf(stderr, "OPENSEARCH_INDEXは小文字英数字、ハイフン、アンダースコアで指定してください\n");
         return 0;
     }
@@ -823,7 +831,7 @@ int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents)
         }
         memcpy(date, timestamp, 8);
         date[8] = '\0';
-        authorization = build_authorization(host_header, uri, body, strlen(body),
+        authorization = build_authorization("POST", host_header, uri, body, strlen(body),
                                             access_key, secret_key, region, service,
                                             session_token, timestamp, date,
                                             canonical_hash);
@@ -985,5 +993,264 @@ cleanup:
     free(response.data);
     clear_credentials(&credentials);
     fflush(stdout);
+    return success;
+}
+
+/*
+ * OpenSearchの古いデータを削除する関数.
+ * Returns 1 if all expired data was successfully deleted, 0 otherwise.
+ */
+int deleteExpiredYoutubeContentsFromOpenSearch(void)
+{
+    const char *opensearch_url = getenv("OPENSEARCH_URL");
+    const char *index_name = getenv("OPENSEARCH_INDEX");
+    const char *region = getenv("AWS_REGION");
+    const char *service = "es";
+    const char *session_token;
+    const char *secret_key;
+    const char *access_key;
+    // 24時間を超過したデータを削除するクエリ
+    const char delete_query[] =
+        "{\"query\":{\"range\":{\"insertedAt\":{\"lt\":\"now-24h\"}}}}";
+    char *request_url = NULL;
+    char *host = NULL;
+    char *port = NULL;
+    char *uri = NULL;
+    char *host_header = NULL;
+    char *authorization = NULL;
+    char timestamp[17];
+    char date[9];
+    char *header_value = NULL;
+    CURLU *url_parts = NULL;
+    CURL *curl = NULL;
+    struct curl_slist *headers = NULL;
+    CURLcode curl_result;
+    long http_status = 0;
+    ResponseBuffer response = {NULL, 0};
+    AwsCredentials credentials = {NULL, NULL, NULL};
+    SYSTEMTIME utc_time;
+    struct tm utc_tm;
+    size_t base_length;
+    int credential_status;
+    int success = 0;
+
+    if (opensearch_url == NULL || opensearch_url[0] == '\0') {
+        fprintf(stderr, "定期削除: OPENSEARCH_URLが設定されていません\n");
+        return 0;
+    }
+    if (index_name == NULL || index_name[0] == '\0') {
+        index_name = "youtube_search";
+    }
+    if (region == NULL || region[0] == '\0') {
+        region = getenv("AWS_DEFAULT_REGION");
+    }
+    if (region == NULL || region[0] == '\0') {
+        fprintf(stderr, "定期削除: AWS_REGIONが設定されていません\n");
+        return 0;
+    }
+
+    credential_status = resolve_credentials(&credentials);
+    if (credential_status <= 0) {
+        fprintf(stderr, "定期削除: AWS認証情報を取得できませんでした\n");
+        clear_credentials(&credentials);
+        return 0;
+    }
+    access_key = credentials.access_key;
+    secret_key = credentials.secret_key;
+    session_token = credentials.session_token;
+
+    base_length = strlen(opensearch_url);
+    while (base_length > 0 && opensearch_url[base_length - 1] == '/') {
+        base_length--;
+    }
+    request_url = malloc(base_length + strlen(index_name) + sizeof("//_delete_by_query"));
+    if (request_url == NULL) {
+        goto cleanup;
+    }
+
+    // リクエストURLを作成する
+    snprintf(request_url, base_length + strlen(index_name) + sizeof("//_delete_by_query"),
+             "%.*s/%s/_delete_by_query", (int)base_length, opensearch_url, index_name);
+
+    url_parts = curl_url();
+    if (url_parts == NULL || curl_url_set(url_parts, CURLUPART_URL, request_url, 0) != CURLUE_OK ||
+        curl_url_get(url_parts, CURLUPART_HOST, &host, 0) != CURLUE_OK ||
+        curl_url_get(url_parts, CURLUPART_PATH, &uri, 0) != CURLUE_OK) {
+        fprintf(stderr, "定期削除: OPENSEARCH_URLが正しいURLではありません\n");
+        goto cleanup;
+    }
+    if (curl_url_get(url_parts, CURLUPART_PORT, &port, 0) == CURLUE_OK) {
+        size_t host_length = strlen(host) + strlen(port) + 2;
+        host_header = malloc(host_length);
+        if (host_header != NULL) {
+            snprintf(host_header, host_length, "%s:%s", host, port);
+        }
+    } else {
+        host_header = _strdup(host);
+    }
+    if (host_header == NULL) {
+        goto cleanup;
+    }
+
+    GetSystemTime(&utc_time);
+    memset(&utc_tm, 0, sizeof(utc_tm));
+    utc_tm.tm_year = (int)utc_time.wYear - 1900;
+    utc_tm.tm_mon = (int)utc_time.wMonth - 1;
+    utc_tm.tm_mday = (int)utc_time.wDay;
+    utc_tm.tm_hour = (int)utc_time.wHour;
+    utc_tm.tm_min = (int)utc_time.wMinute;
+    utc_tm.tm_sec = (int)utc_time.wSecond;
+    if (strftime(timestamp, sizeof(timestamp), "%Y%m%dT%H%M%SZ", &utc_tm) != 16) {
+        fprintf(stderr, "定期削除: 署名用のUTC時刻を作成できませんでした\n");
+        goto cleanup;
+    }
+    memcpy(date, timestamp, 8);
+    date[8] = '\0';
+    authorization = build_authorization("POST", host_header, uri,
+                                        delete_query, strlen(delete_query),
+                                        access_key, secret_key, region, service,
+                                        session_token, timestamp, date, NULL);
+    if (authorization == NULL) {
+        fprintf(stderr, "定期削除: SigV4署名の作成に失敗しました\n");
+        goto cleanup;
+    }
+
+    curl = curl_easy_init();
+    if (curl == NULL) {
+        goto cleanup;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, request_url);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, delete_query);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)strlen(delete_query));
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_response);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+
+    header_value = malloc(strlen(host_header) + sizeof("Host: "));
+    if (header_value == NULL) {
+        goto cleanup;
+    }
+    sprintf(header_value, "Host: %s", host_header);
+    headers = curl_slist_append(headers, header_value);
+    free(header_value);
+    header_value = NULL;
+    if (headers == NULL) {
+        goto cleanup;
+    }
+    header_value = malloc(strlen(authorization) + sizeof("Authorization: "));
+    if (header_value == NULL) {
+        goto cleanup;
+    }
+    sprintf(header_value, "Authorization: %s", authorization);
+    headers = curl_slist_append(headers, header_value);
+    free(header_value);
+    header_value = NULL;
+    if (headers == NULL) {
+        goto cleanup;
+    }
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    if (headers == NULL) {
+        goto cleanup;
+    }
+    {
+        unsigned char body_digest[SHA256_SIZE];
+        char body_hash[SHA256_HEX_SIZE];
+        char date_header[64];
+        char payload_header[SHA256_HEX_SIZE + 24];
+        struct curl_slist *updated;
+
+        if (!calculate_sha256((const unsigned char *)delete_query, strlen(delete_query),
+                              body_digest, 0, NULL, 0)) {
+            goto cleanup;
+        }
+        encode_hex(body_digest, sizeof(body_digest), body_hash);
+        sprintf(date_header, "x-amz-date: %s", timestamp);
+        sprintf(payload_header, "x-amz-content-sha256: %s", body_hash);
+        updated = curl_slist_append(headers, date_header);
+        if (updated == NULL) {
+            goto cleanup;
+        }
+        headers = updated;
+        updated = curl_slist_append(headers, payload_header);
+        if (updated == NULL) {
+            goto cleanup;
+        }
+        headers = updated;
+    }
+    if (session_token != NULL && session_token[0] != '\0') {
+        header_value = malloc(strlen(session_token) + sizeof("x-amz-security-token: "));
+        if (header_value == NULL) {
+            goto cleanup;
+        }
+        sprintf(header_value, "x-amz-security-token: %s", session_token);
+        {
+            struct curl_slist *updated = curl_slist_append(headers, header_value);
+            free(header_value);
+            header_value = NULL;
+            if (updated == NULL) {
+                goto cleanup;
+            }
+            headers = updated;
+        }
+    }
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    // OpenSearchに対してDELETEリクエストを送信する
+    curl_result = curl_easy_perform(curl);
+    if (curl_result != CURLE_OK ||
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status) != CURLE_OK) {
+        fprintf(stderr, "定期削除: OpenSearch接続に失敗しました: %s\n",
+                curl_easy_strerror(curl_result));
+        goto cleanup;
+    }
+    if (http_status < 200 || http_status >= 300) {
+        fprintf(stderr, "定期削除: HTTPステータス %ld\n", http_status);
+        if (response.data != NULL) {
+            print_redacted_response(response.data);
+        }
+        goto cleanup;
+    }
+    {
+        cJSON *delete_response = cJSON_Parse(response.data);
+        const cJSON *deleted = cJSON_GetObjectItemCaseSensitive(delete_response, "deleted");
+        const cJSON *failures = cJSON_GetObjectItemCaseSensitive(delete_response, "failures");
+        const cJSON *timed_out = cJSON_GetObjectItemCaseSensitive(delete_response, "timed_out");
+        int failure_count = cJSON_GetArraySize(failures);
+        int timed_out_flag = cJSON_IsTrue(timed_out);
+
+        if (!cJSON_IsObject(delete_response)) {
+            fprintf(stderr, "定期削除: OpenSearch応答を解析できませんでした\n");
+            cJSON_Delete(delete_response);
+            goto cleanup;
+        }
+        printf("定期削除: insertedAtが24時間以上前の文書を%d件削除しました%s\n",
+               cJSON_IsNumber(deleted) ? deleted->valueint : 0,
+             failure_count > 0 || timed_out_flag ? "（一部失敗またはタイムアウトあり）" : "");
+        cJSON_Delete(delete_response);
+         if (failure_count > 0 || timed_out_flag) {
+            goto cleanup;
+        }
+    }
+    success = 1;
+
+cleanup:
+    if (curl != NULL) {
+        curl_easy_cleanup(curl);
+    }
+    curl_slist_free_all(headers);
+    if (url_parts != NULL) {
+        curl_url_cleanup(url_parts);
+    }
+    curl_free(host);
+    curl_free(port);
+    curl_free(uri);
+    free(host_header);
+    free(request_url);
+    free(authorization);
+    free(header_value);
+    free(response.data);
+    clear_credentials(&credentials);
     return success;
 }

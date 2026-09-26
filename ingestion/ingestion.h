@@ -9,4 +9,7 @@
  */
 int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents);
 
+/* insertedAtが24時間より古い文書をOpenSearchから削除する. */
+int deleteExpiredYoutubeContentsFromOpenSearch(void);
+
 #endif
