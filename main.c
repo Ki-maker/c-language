@@ -9,14 +9,14 @@
 
 #include "router.h"
 #include "search.h"
-#include "ingestion/ingestion.h"
+#include "opensearchIngestion/opensearchIngestion.h"
 
 #ifdef _MSC_VER
 #pragma comment(lib, "ws2_32.lib")
 #endif
 
 #define PORT 8080
-#define CLEANUP_INTERVAL_MS (6UL * 60UL * 60UL * 1000UL)
+#define CLEANUP_INTERVAL_MS (60UL * 1000UL)
 
 /*
  * OpenSearchの古いデータを定期的に削除するスレッド関数.
@@ -28,7 +28,7 @@ static DWORD WINAPI periodic_cleanup_thread(LPVOID parameter)
 
     for (;;) {
         if (!deleteExpiredYoutubeContentsFromOpenSearch()) {
-            fprintf(stderr, "24時間超過データの定期削除に失敗しました\n");
+            fprintf(stderr, "1分超過データの定期削除に失敗しました\n");
         }
         Sleep(CLEANUP_INTERVAL_MS);
     }
@@ -313,10 +313,10 @@ int main(void)
 
     cleanup_thread = CreateThread(NULL, 0, periodic_cleanup_thread, NULL, 0, NULL);
     if (cleanup_thread == NULL) {
-        fprintf(stderr, "24時間超過データの定期削除スレッドを開始できませんでした\n");
+        fprintf(stderr, "1分超過データの定期削除スレッドを開始できませんでした\n");
     } else {
         CloseHandle(cleanup_thread);
-        printf("24時間超過データを起動時と6時間ごとに削除します。\n");
+        printf("1分超過データを起動時と1分ごとに削除します。\n");
     }
 
     while (1) {

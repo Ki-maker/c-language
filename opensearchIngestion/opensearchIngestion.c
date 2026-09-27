@@ -11,7 +11,8 @@
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 
-#include "ingestion.h"
+#include "opensearchIngestion.h"
+#include "../opensearchNetwork.h"
 
 #define SHA256_SIZE 32
 #define SHA256_HEX_SIZE 65
@@ -691,566 +692,60 @@ static int valid_index_name(const char *name)
  */
 int setYoutubeContentsToOpenSearch(const YouTubeApiContentsList *contents)
 {
-    const char *opensearch_url;
-    const char *index_name;
-    const char *access_key = NULL;
-    const char *secret_key = NULL;
-    const char *region;
-    const char *service;
-    const char *session_token = NULL;
-    char *request_url = NULL;
-    char *host = NULL;
-    char *port = NULL;
-    char *uri = NULL;
-    char *query = NULL;
-    char *host_header = NULL;
-    char *body = NULL;
-    char *authorization = NULL;
-    char canonical_hash[SHA256_HEX_SIZE] = "";
+    const char *index_name = getenv("OPENSEARCH_INDEX");
+    char path[512];
     char inserted_at[25];
-    char timestamp[17];
-    char date[9];
-    SYSTEMTIME utc_time;
-    struct tm utc_tm;
-    CURLU *url_parts = NULL;
-    struct curl_slist *headers = NULL;
-    CURL *curl = NULL;
-    CURLcode curl_result = CURLE_FAILED_INIT;
+    char *body = NULL;
+    char *response = NULL;
     long http_status = 0;
-    ResponseBuffer response = {NULL, 0};
-    AwsCredentials credentials = {NULL, NULL, NULL};
-    size_t base_length;
-    int credential_status;
+    cJSON *bulk_response = NULL;
+    const cJSON *errors;
     int success = 0;
 
     if (contents == NULL) {
         return 0;
     }
-
-    opensearch_url = getenv("OPENSEARCH_URL");
-    if (opensearch_url == NULL || opensearch_url[0] == '\0') {
-        fprintf(stderr, "OPENSEARCH_URLが設定されていません\n");
-        return 0;
-    }
-    index_name = getenv("OPENSEARCH_INDEX");
     if (index_name == NULL || index_name[0] == '\0') {
         index_name = "youtube_search";
     }
-    if (!valid_index_name(index_name)) {
-        fprintf(stderr, "定期削除: OPENSEARCH_INDEXが正しくありません\n");
+    if (!valid_index_name(index_name) ||
+        snprintf(path, sizeof(path), "/%s/_bulk", index_name) >= (int)sizeof(path) ||
+        !format_utc_timestamp(inserted_at)) {
         return 0;
     }
-    if (!valid_index_name(index_name)) {
-        fprintf(stderr, "OPENSEARCH_INDEXは小文字英数字、ハイフン、アンダースコアで指定してください\n");
-        return 0;
-    }
-
-    region = getenv("AWS_REGION");
-    if (region == NULL || region[0] == '\0') {
-        region = getenv("AWS_DEFAULT_REGION");
-    }
-    service = "es";
-    printf("OpenSearchにデータを登録します: %zu件\n", contents->count);
     if (contents->count == 0) {
         return 1;
     }
-    credential_status = resolve_credentials(&credentials);
-    if (credential_status < 0) {
-        fprintf(stderr, "AWS認証情報を取得できませんでした\n");
-        goto cleanup;
-    }
-    access_key = credentials.access_key;
-    secret_key = credentials.secret_key;
-    session_token = credentials.session_token;
-    if (credential_status > 0 && (region == NULL || region[0] == '\0')) {
-        fprintf(stderr, "SigV4署名にはAWS_REGIONが必要です\n");
-        goto cleanup;
-    }
-
-    base_length = strlen(opensearch_url);
-    while (base_length > 0 && opensearch_url[base_length - 1] == '/') {
-        base_length--;
-    }
-    request_url = malloc(base_length + strlen(index_name) + sizeof("//_bulk"));
-    if (request_url == NULL) {
-        goto cleanup;
-    }
-
-    // リクエストURLを作成
-    snprintf(request_url, base_length + strlen(index_name) + sizeof("//_bulk"),
-             "%.*s/%s/_bulk", (int)base_length, opensearch_url, index_name);
-
-    // bulkinsert用のリクエスト本文を作成
-    if (!format_utc_timestamp(inserted_at)) {
-        fprintf(stderr, "登録時刻を作成できませんでした\n");
-        goto cleanup;
-    }
     body = build_bulk_body(contents, index_name, inserted_at);
-    if (body == NULL) {
-        fprintf(stderr, "OpenSearch用リクエスト本文の作成に失敗しました\n");
+    if (body == NULL || !executeOpenSearchRequest("POST", path, body,
+                                                   "application/x-ndjson",
+                                                   &response, &http_status)) {
         goto cleanup;
     }
-
-    url_parts = curl_url();
-    if (url_parts == NULL || curl_url_set(url_parts, CURLUPART_URL, request_url, 0) != CURLUE_OK ||
-        curl_url_get(url_parts, CURLUPART_HOST, &host, 0) != CURLUE_OK ||
-        curl_url_get(url_parts, CURLUPART_PATH, &uri, 0) != CURLUE_OK) {
-        fprintf(stderr, "OPENSEARCH_URLが正しいURLではありません\n");
-        goto cleanup;
-    }
-    if (curl_url_get(url_parts, CURLUPART_QUERY, &query, 0) == CURLUE_OK &&
-        query != NULL && query[0] != '\0') {
-        fprintf(stderr, "OPENSEARCH_URLにクエリ文字列は指定できません\n");
-        goto cleanup;
-    }
-    if (curl_url_get(url_parts, CURLUPART_PORT, &port, 0) == CURLUE_OK) {
-        size_t host_length = strlen(host) + strlen(port) + 2;
-        host_header = malloc(host_length);
-        if (host_header != NULL) {
-            snprintf(host_header, host_length, "%s:%s", host, port);
-        }
-    } else {
-        host_header = _strdup(host);
-    }
-    if (host_header == NULL) {
-        goto cleanup;
-    }
-
-    if (access_key != NULL && access_key[0] != '\0') {
-        GetSystemTime(&utc_time);
-        memset(&utc_tm, 0, sizeof(utc_tm));
-        utc_tm.tm_year = (int)utc_time.wYear - 1900;
-        utc_tm.tm_mon = (int)utc_time.wMonth - 1;
-        utc_tm.tm_mday = (int)utc_time.wDay;
-        utc_tm.tm_hour = (int)utc_time.wHour;
-        utc_tm.tm_min = (int)utc_time.wMinute;
-        utc_tm.tm_sec = (int)utc_time.wSecond;
-        if (strftime(timestamp, sizeof(timestamp), "%Y%m%dT%H%M%SZ", &utc_tm) != 16) {
-            fprintf(stderr, "署名用のUTC時刻を作成できませんでした\n");
-            goto cleanup;
-        }
-        memcpy(date, timestamp, 8);
-        date[8] = '\0';
-        authorization = build_authorization("POST", host_header, uri, body, strlen(body),
-                                            access_key, secret_key, region, service,
-                                            session_token, timestamp, date,
-                                            canonical_hash);
-        if (authorization == NULL) {
-            fprintf(stderr, "AWS SigV4署名の計算に失敗しました\n");
-            goto cleanup;
-        }
-    }
-
-    curl = curl_easy_init();
-    if (curl == NULL) {
-        fprintf(stderr, "libcurlの初期化に失敗しました\n");
-        goto cleanup;
-    }
-
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_response);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_URL, request_url);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)strlen(body));
-    headers = curl_slist_append(headers, "Content-Type: application/x-ndjson");
-    if (headers == NULL) {
-        goto cleanup;
-    }
-    if (authorization != NULL) {
-        char *host_header_value = malloc(strlen(host_header) + sizeof("Host: "));
-        struct curl_slist *updated_headers;
-        if (host_header_value == NULL) {
-            goto cleanup;
-        }
-        sprintf(host_header_value, "Host: %s", host_header);
-        updated_headers = curl_slist_append(headers, host_header_value);
-        free(host_header_value);
-        if (updated_headers == NULL) {
-            goto cleanup;
-        }
-        headers = updated_headers;
-        char *header = malloc(strlen(authorization) + sizeof("Authorization: "));
-        if (header == NULL) {
-            goto cleanup;
-        }
-        sprintf(header, "Authorization: %s", authorization);
-        updated_headers = curl_slist_append(headers, header);
-        free(header);
-        if (updated_headers == NULL) {
-            goto cleanup;
-        }
-        headers = updated_headers;
-        {
-            char date_header[64];
-            char payload_header[SHA256_HEX_SIZE + 24];
-            unsigned char body_digest[SHA256_SIZE];
-            char body_hash[SHA256_HEX_SIZE];
-            struct curl_slist *updated;
-            sprintf(date_header, "x-amz-date: %s", timestamp);
-            updated = curl_slist_append(headers, date_header);
-            if (updated == NULL) {
-                goto cleanup;
-            }
-            headers = updated;
-            if (!calculate_sha256((const unsigned char *)body, strlen(body),
-                                  body_digest, 0, NULL, 0)) {
-                goto cleanup;
-            }
-            encode_hex(body_digest, sizeof(body_digest), body_hash);
-            sprintf(payload_header, "x-amz-content-sha256: %s", body_hash);
-            updated = curl_slist_append(headers, payload_header);
-            if (updated == NULL) {
-                goto cleanup;
-            }
-            headers = updated;
-            if (session_token != NULL && session_token[0] != '\0') {
-                char *token_header = malloc(strlen(session_token) + sizeof("x-amz-security-token: "));
-                struct curl_slist *updated;
-                if (token_header == NULL) {
-                    goto cleanup;
-                }
-                sprintf(token_header, "x-amz-security-token: %s", session_token);
-                updated = curl_slist_append(headers, token_header);
-                free(token_header);
-                if (updated == NULL) {
-                    goto cleanup;
-                }
-                headers = updated;
-            }
-        }
-    }
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-    // OpenSearchへのリクエストを実行
-    curl_result = curl_easy_perform(curl);
-    if (curl_result == CURLE_OK) {
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
-    }
-
-    if (curl_result != CURLE_OK) {
-        fprintf(stderr, "OpenSearchへの接続に失敗しました: %s\n",
-                curl_easy_strerror(curl_result));
-        goto cleanup;
-    }
-
     if (http_status < 200 || http_status >= 300) {
-        fprintf(stderr, "OpenSearchからHTTPステータス %ld が返されました\n",
-                http_status);
-        if (canonical_hash[0] != '\0') {
-            fprintf(stderr, "ローカルCanonical Request SHA256: %s\n", canonical_hash);
-        }
-        if (response.data != NULL && response.data[0] != '\0') {
-            print_redacted_response(response.data);
-        }
         goto cleanup;
     }
-    if (response.data != NULL) {
-        cJSON *bulk_response = cJSON_Parse(response.data);
-        const cJSON *errors = cJSON_GetObjectItemCaseSensitive(bulk_response, "errors");
-        if (cJSON_IsObject(bulk_response) && cJSON_IsArray(
-                cJSON_GetObjectItemCaseSensitive(bulk_response, "items"))) {
-            size_t total_count;
-            size_t failed_count = print_bulk_item_results(bulk_response, &total_count);
-            printf("Bulk登録結果: 全%zu件、成功%zu件、失敗%zu件\n",
-                   total_count, total_count - failed_count, failed_count);
-            if (cJSON_IsTrue(errors) || failed_count > 0) {
-                fprintf(stderr, "OpenSearch Bulk APIで一部のデータ登録に失敗しました\n");
-                cJSON_Delete(bulk_response);
-                goto cleanup;
-            }
-        } else {
-            fprintf(stderr, "OpenSearch Bulk APIの応答を解析できませんでした\n");
-            cJSON_Delete(bulk_response);
+    bulk_response = cJSON_Parse(response == NULL ? "" : response);
+    if (!cJSON_IsObject(bulk_response) ||
+        !cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(bulk_response, "items"))) {
+        goto cleanup;
+    }
+    {
+        size_t total_count;
+        size_t failed_count = print_bulk_item_results(bulk_response, &total_count);
+        errors = cJSON_GetObjectItemCaseSensitive(bulk_response, "errors");
+        if (cJSON_IsTrue(errors) || failed_count > 0) {
             goto cleanup;
         }
-        cJSON_Delete(bulk_response);
+        printf("Bulk登録結果: 全%zu件、成功%zu件、失敗%zu件\n",
+               total_count, total_count - failed_count, failed_count);
     }
-
-    printf("OpenSearchへの接続に成功しました\n");
     success = 1;
 
 cleanup:
-    if (curl != NULL) {
-        curl_easy_cleanup(curl);
-    }
-    if (headers != NULL) {
-        curl_slist_free_all(headers);
-    }
-    if (url_parts != NULL) {
-        curl_url_cleanup(url_parts);
-    }
-    curl_free(host);
-    curl_free(port);
-    curl_free(uri);
-    curl_free(query);
-    free(host_header);
+    cJSON_Delete(bulk_response);
+    free(response);
     free(body);
-    free(request_url);
-    free(authorization);
-    free(response.data);
-    clear_credentials(&credentials);
-    fflush(stdout);
     return success;
 }
 
-/*
- * OpenSearchの古いデータを削除する関数.
- * Returns 1 if all expired data was successfully deleted, 0 otherwise.
- */
-int deleteExpiredYoutubeContentsFromOpenSearch(void)
-{
-    const char *opensearch_url = getenv("OPENSEARCH_URL");
-    const char *index_name = getenv("OPENSEARCH_INDEX");
-    const char *region = getenv("AWS_REGION");
-    const char *service = "es";
-    const char *session_token;
-    const char *secret_key;
-    const char *access_key;
-    // 24時間を超過したデータを削除するクエリ
-    const char delete_query[] =
-        "{\"query\":{\"range\":{\"insertedAt\":{\"lt\":\"now-24h\"}}}}";
-    char *request_url = NULL;
-    char *host = NULL;
-    char *port = NULL;
-    char *uri = NULL;
-    char *host_header = NULL;
-    char *authorization = NULL;
-    char timestamp[17];
-    char date[9];
-    char *header_value = NULL;
-    CURLU *url_parts = NULL;
-    CURL *curl = NULL;
-    struct curl_slist *headers = NULL;
-    CURLcode curl_result;
-    long http_status = 0;
-    ResponseBuffer response = {NULL, 0};
-    AwsCredentials credentials = {NULL, NULL, NULL};
-    SYSTEMTIME utc_time;
-    struct tm utc_tm;
-    size_t base_length;
-    int credential_status;
-    int success = 0;
-
-    if (opensearch_url == NULL || opensearch_url[0] == '\0') {
-        fprintf(stderr, "定期削除: OPENSEARCH_URLが設定されていません\n");
-        return 0;
-    }
-    if (index_name == NULL || index_name[0] == '\0') {
-        index_name = "youtube_search";
-    }
-    if (region == NULL || region[0] == '\0') {
-        region = getenv("AWS_DEFAULT_REGION");
-    }
-    if (region == NULL || region[0] == '\0') {
-        fprintf(stderr, "定期削除: AWS_REGIONが設定されていません\n");
-        return 0;
-    }
-
-    credential_status = resolve_credentials(&credentials);
-    if (credential_status <= 0) {
-        fprintf(stderr, "定期削除: AWS認証情報を取得できませんでした\n");
-        clear_credentials(&credentials);
-        return 0;
-    }
-    access_key = credentials.access_key;
-    secret_key = credentials.secret_key;
-    session_token = credentials.session_token;
-
-    base_length = strlen(opensearch_url);
-    while (base_length > 0 && opensearch_url[base_length - 1] == '/') {
-        base_length--;
-    }
-    request_url = malloc(base_length + strlen(index_name) + sizeof("//_delete_by_query"));
-    if (request_url == NULL) {
-        goto cleanup;
-    }
-
-    // リクエストURLを作成する
-    snprintf(request_url, base_length + strlen(index_name) + sizeof("//_delete_by_query"),
-             "%.*s/%s/_delete_by_query", (int)base_length, opensearch_url, index_name);
-
-    url_parts = curl_url();
-    if (url_parts == NULL || curl_url_set(url_parts, CURLUPART_URL, request_url, 0) != CURLUE_OK ||
-        curl_url_get(url_parts, CURLUPART_HOST, &host, 0) != CURLUE_OK ||
-        curl_url_get(url_parts, CURLUPART_PATH, &uri, 0) != CURLUE_OK) {
-        fprintf(stderr, "定期削除: OPENSEARCH_URLが正しいURLではありません\n");
-        goto cleanup;
-    }
-    if (curl_url_get(url_parts, CURLUPART_PORT, &port, 0) == CURLUE_OK) {
-        size_t host_length = strlen(host) + strlen(port) + 2;
-        host_header = malloc(host_length);
-        if (host_header != NULL) {
-            snprintf(host_header, host_length, "%s:%s", host, port);
-        }
-    } else {
-        host_header = _strdup(host);
-    }
-    if (host_header == NULL) {
-        goto cleanup;
-    }
-
-    GetSystemTime(&utc_time);
-    memset(&utc_tm, 0, sizeof(utc_tm));
-    utc_tm.tm_year = (int)utc_time.wYear - 1900;
-    utc_tm.tm_mon = (int)utc_time.wMonth - 1;
-    utc_tm.tm_mday = (int)utc_time.wDay;
-    utc_tm.tm_hour = (int)utc_time.wHour;
-    utc_tm.tm_min = (int)utc_time.wMinute;
-    utc_tm.tm_sec = (int)utc_time.wSecond;
-    if (strftime(timestamp, sizeof(timestamp), "%Y%m%dT%H%M%SZ", &utc_tm) != 16) {
-        fprintf(stderr, "定期削除: 署名用のUTC時刻を作成できませんでした\n");
-        goto cleanup;
-    }
-    memcpy(date, timestamp, 8);
-    date[8] = '\0';
-    authorization = build_authorization("POST", host_header, uri,
-                                        delete_query, strlen(delete_query),
-                                        access_key, secret_key, region, service,
-                                        session_token, timestamp, date, NULL);
-    if (authorization == NULL) {
-        fprintf(stderr, "定期削除: SigV4署名の作成に失敗しました\n");
-        goto cleanup;
-    }
-
-    curl = curl_easy_init();
-    if (curl == NULL) {
-        goto cleanup;
-    }
-    curl_easy_setopt(curl, CURLOPT_URL, request_url);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, delete_query);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)strlen(delete_query));
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_response);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
-
-    header_value = malloc(strlen(host_header) + sizeof("Host: "));
-    if (header_value == NULL) {
-        goto cleanup;
-    }
-    sprintf(header_value, "Host: %s", host_header);
-    headers = curl_slist_append(headers, header_value);
-    free(header_value);
-    header_value = NULL;
-    if (headers == NULL) {
-        goto cleanup;
-    }
-    header_value = malloc(strlen(authorization) + sizeof("Authorization: "));
-    if (header_value == NULL) {
-        goto cleanup;
-    }
-    sprintf(header_value, "Authorization: %s", authorization);
-    headers = curl_slist_append(headers, header_value);
-    free(header_value);
-    header_value = NULL;
-    if (headers == NULL) {
-        goto cleanup;
-    }
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    if (headers == NULL) {
-        goto cleanup;
-    }
-    {
-        unsigned char body_digest[SHA256_SIZE];
-        char body_hash[SHA256_HEX_SIZE];
-        char date_header[64];
-        char payload_header[SHA256_HEX_SIZE + 24];
-        struct curl_slist *updated;
-
-        if (!calculate_sha256((const unsigned char *)delete_query, strlen(delete_query),
-                              body_digest, 0, NULL, 0)) {
-            goto cleanup;
-        }
-        encode_hex(body_digest, sizeof(body_digest), body_hash);
-        sprintf(date_header, "x-amz-date: %s", timestamp);
-        sprintf(payload_header, "x-amz-content-sha256: %s", body_hash);
-        updated = curl_slist_append(headers, date_header);
-        if (updated == NULL) {
-            goto cleanup;
-        }
-        headers = updated;
-        updated = curl_slist_append(headers, payload_header);
-        if (updated == NULL) {
-            goto cleanup;
-        }
-        headers = updated;
-    }
-    if (session_token != NULL && session_token[0] != '\0') {
-        header_value = malloc(strlen(session_token) + sizeof("x-amz-security-token: "));
-        if (header_value == NULL) {
-            goto cleanup;
-        }
-        sprintf(header_value, "x-amz-security-token: %s", session_token);
-        {
-            struct curl_slist *updated = curl_slist_append(headers, header_value);
-            free(header_value);
-            header_value = NULL;
-            if (updated == NULL) {
-                goto cleanup;
-            }
-            headers = updated;
-        }
-    }
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-    // OpenSearchに対してDELETEリクエストを送信する
-    curl_result = curl_easy_perform(curl);
-    if (curl_result != CURLE_OK ||
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status) != CURLE_OK) {
-        fprintf(stderr, "定期削除: OpenSearch接続に失敗しました: %s\n",
-                curl_easy_strerror(curl_result));
-        goto cleanup;
-    }
-    if (http_status < 200 || http_status >= 300) {
-        fprintf(stderr, "定期削除: HTTPステータス %ld\n", http_status);
-        if (response.data != NULL) {
-            print_redacted_response(response.data);
-        }
-        goto cleanup;
-    }
-    {
-        cJSON *delete_response = cJSON_Parse(response.data);
-        const cJSON *deleted = cJSON_GetObjectItemCaseSensitive(delete_response, "deleted");
-        const cJSON *failures = cJSON_GetObjectItemCaseSensitive(delete_response, "failures");
-        const cJSON *timed_out = cJSON_GetObjectItemCaseSensitive(delete_response, "timed_out");
-        int failure_count = cJSON_GetArraySize(failures);
-        int timed_out_flag = cJSON_IsTrue(timed_out);
-
-        if (!cJSON_IsObject(delete_response)) {
-            fprintf(stderr, "定期削除: OpenSearch応答を解析できませんでした\n");
-            cJSON_Delete(delete_response);
-            goto cleanup;
-        }
-        printf("定期削除: insertedAtが24時間以上前の文書を%d件削除しました%s\n",
-               cJSON_IsNumber(deleted) ? deleted->valueint : 0,
-             failure_count > 0 || timed_out_flag ? "（一部失敗またはタイムアウトあり）" : "");
-        cJSON_Delete(delete_response);
-         if (failure_count > 0 || timed_out_flag) {
-            goto cleanup;
-        }
-    }
-    success = 1;
-
-cleanup:
-    if (curl != NULL) {
-        curl_easy_cleanup(curl);
-    }
-    curl_slist_free_all(headers);
-    if (url_parts != NULL) {
-        curl_url_cleanup(url_parts);
-    }
-    curl_free(host);
-    curl_free(port);
-    curl_free(uri);
-    free(host_header);
-    free(request_url);
-    free(authorization);
-    free(header_value);
-    free(response.data);
-    clear_credentials(&credentials);
-    return success;
-}
