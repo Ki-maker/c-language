@@ -1,7 +1,7 @@
 #ifndef INGESTION_H
 #define INGESTION_H
 
-#include "../search/search.h"
+#include "../youtubeApiSearch/youtubeApiSearch.h"
 
 /*
  * APIのデータをOpenSearchに登録する.

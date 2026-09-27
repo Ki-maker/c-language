@@ -9,7 +9,7 @@
 
 - `main.c`: HTTP 通信
 - `router.c`: URL と処理の振り分け
-- `search.c`: 検索ボタンの処理
+- `youtubeApiSearch.c`: YouTube API検索処理
 
 新しい処理を追加するときは、`main.c` ではなく `router.c` にルートを追加します。
 ビルド時は `*.c` により、フォルダー内の C ファイルが自動的に対象になります。
@@ -31,7 +31,7 @@ C ファイルを追加しても、ビルドコマンドの変更は不要です
 現在の `MSYS` ターミナルをそのまま使う場合は、GCC の絶対パスを指定します。
 
 ```bash
-/c/msys64/ucrt64/bin/gcc.exe main.c router/router.c search/search.c -o main.exe -lcurl -lcjson -lws2_32
+/c/msys64/ucrt64/bin/gcc.exe main.c router/router.c youtubeApiSearch/youtubeApiSearch.c -o main.exe -lcurl -lcjson -lws2_32
 ```
 
 または、VS Code の「タスクの実行」から `C: すべての C ファイルをビルド` を選びます。
@@ -40,7 +40,7 @@ C ファイルを追加しても、ビルドコマンドの変更は不要です
 フォルダー内の C ファイルをまとめてビルドできます。
 
 ```bash
-gcc main.c router/router.c search/search.c -o main.exe -lcurl -lcjson -lws2_32
+gcc main.c router/router.c youtubeApiSearch/youtubeApiSearch.c -o main.exe -lcurl -lcjson -lws2_32
 ```
 
 ### OpenSearchへの登録
@@ -72,7 +72,7 @@ PowerShell では次のように起動します。
 PowerShell からビルドする場合は、GCC の場所を指定できます。
 
 ```powershell
-& "C:\msys64\ucrt64\bin\gcc.exe" main.c router/router.c search/search.c -o main.exe -lcurl -lcjson -lws2_32
+& "C:\msys64\ucrt64\bin\gcc.exe" main.c router/router.c youtubeApiSearch/youtubeApiSearch.c -o main.exe -lcurl -lcjson -lws2_32
 ```
 
 表示されたらブラウザで次の URL を開きます。

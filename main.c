@@ -8,7 +8,7 @@
 #endif
 
 #include "router.h"
-#include "search.h"
+#include "youtubeApiSearch.h"
 #include "opensearchIngestion/opensearchIngestion.h"
 
 #ifdef _MSC_VER

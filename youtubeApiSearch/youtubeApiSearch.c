@@ -8,7 +8,7 @@
 #include <windows.h>
 #endif
 
-#include "search.h"
+#include "youtubeApiSearch.h"
 
 // TODO このメモリサイズは元に戻す
 #define BUFFER_API_RESPONSE 35000
