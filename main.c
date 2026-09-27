@@ -10,6 +10,7 @@
 #include "router.h"
 #include "youtubeApiSearch.h"
 #include "opensearchIngestion/opensearchIngestion.h"
+#include "opensearchSearch/opensearchSearch.h"
 
 #ifdef _MSC_VER
 #pragma comment(lib, "ws2_32.lib")
@@ -141,13 +142,29 @@ static const char *extract_keyword_from_request(const char *request,
     return buffer;
 }
 
+static int extract_sort_order_from_request(const char *request)
+{
+    const char *sort_position = strstr(request, "sort_order=");
+    const char *value;
+
+    if (sort_position == NULL) {
+        return 1;
+    }
+    value = sort_position + strlen("sort_order=");
+    if (value[0] >= '1' && value[0] <= '7' &&
+        (value[1] == '\0' || value[1] == '&' || value[1] == ' ')) {
+        return value[0] - '0';
+    }
+    return 1;
+}
+
 /*
  * index.htmlから1文字ずつ読み取り、ブラウザで送信している.
  
  */
 static int send_template(FILE *html_file, SOCKET client_socket,
                          const char *request, const char *message,
-                         const char *keyword)
+                         const char *keyword, int sort_order)
 {
     static const char api_placeholder[] = "{{api_res_data}}";
     static const char message_placeholder[] = "{{message}}";
@@ -226,6 +243,9 @@ static int send_template(FILE *html_file, SOCKET client_socket,
 
             // OpenSearchにデータを入れる処理を行う
             setYoutubeContentsToOpenSearch(contents);
+
+            // OpenSearchへの検索をする
+            searchOpenSearch(sort_order);
 
             api_result = getFormattedYoutubeContents(contents);
             if (api_result == NULL) {
@@ -335,7 +355,9 @@ int main(void)
         request[request_length] = '\0';
 
         char keyword[40] = {0};
+        int sort_order;
         extract_keyword_from_request(request, keyword, sizeof(keyword));
+        sort_order = extract_sort_order_from_request(request);
 
         const char *file_name = "index.html";
         const char *content_type = "text/html; charset=UTF-8";
@@ -383,7 +405,7 @@ int main(void)
 
         if (!send_all(client_socket, response, header_length) ||
             !send_template(html_file, client_socket, request,
-                           search_message, keyword)) {
+                           search_message, keyword, sort_order)) {
             fprintf(stderr, "Failed to send the HTTP response.\n");
         }
 
