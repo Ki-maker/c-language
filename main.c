@@ -245,14 +245,9 @@ static int send_template(FILE *html_file, SOCKET client_socket,
             setYoutubeContentsToOpenSearch(contents);
 
             // 保存済みvideoIdを使ってOpenSearchを検索する
-            for (size_t index = 0; index < contents->count; index++) {
-                char *search_result = searchOpenSearch(contents->items[index].videoId,
-                                                       sort_order);
-                free(search_result);
-            }
-
-            api_result = getFormattedYoutubeContents(contents);
+            api_result = searchOpenSearch(contents, sort_order);
             if (api_result == NULL) {
+                fprintf(stderr, "OpenSearch検索結果を取得できませんでした\n");
                 freeYoutubeApiContents(contents);
                 return 0;
             }

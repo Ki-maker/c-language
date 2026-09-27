@@ -27,13 +27,6 @@ typedef struct {
 } YouTubeApiContentsList;
 
 /*
- * 取得済みの構造体リストを整形済みJSON文字列へ変換する.
- * main.c から呼び出される.
- * 呼び出し元は返されたメモリを free() する必要がある.
- */
-char *getFormattedYoutubeContents(const YouTubeApiContentsList *contents);
-
-/*
  * API検索して、取得した構造をまとめて返す.
  * main.c から呼び出される.
  */

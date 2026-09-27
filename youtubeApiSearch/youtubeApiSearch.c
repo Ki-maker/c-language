@@ -72,80 +72,6 @@ static long long copy_json_number(const cJSON *object, const char *key)
     return 0;
 }
 
-static char *build_content_json(const YouTubeApiContents *contents)
-{
-    cJSON *object;
-    cJSON *image;
-    char *result;
-
-    if (contents == NULL) {
-        return NULL;
-    }
-
-    object = cJSON_CreateObject();
-    image = cJSON_CreateObject();
-    if (object == NULL || image == NULL) {
-        cJSON_Delete(object);
-        cJSON_Delete(image);
-        return NULL;
-    }
-
-    cJSON_AddStringToObject(object, "videoId", contents->videoId == NULL ? "" : contents->videoId);
-    cJSON_AddStringToObject(object, "channelId", contents->channelId == NULL ? "" : contents->channelId);
-    cJSON_AddStringToObject(object, "title", contents->title == NULL ? "" : contents->title);
-    cJSON_AddStringToObject(object, "channelName", contents->channelName == NULL ? "" : contents->channelName);
-    cJSON_AddStringToObject(image, "large", contents->imageLarge == NULL ? "" : contents->imageLarge);
-    cJSON_AddStringToObject(image, "middle", contents->imageMiddle == NULL ? "" : contents->imageMiddle);
-    cJSON_AddItemToObject(object, "image", image);
-    cJSON_AddStringToObject(object, "publishedAt", contents->publishedAt == NULL ? "" : contents->publishedAt);
-    cJSON_AddNumberToObject(object, "viewCount", (double)contents->viewCount);
-    cJSON_AddNumberToObject(object, "likeCount", (double)contents->likeCount);
-    cJSON_AddNumberToObject(object, "commentCount", (double)contents->commentCount);
-    cJSON_AddStringToObject(object, "videoTime", contents->videoTime == NULL ? "" : contents->videoTime);
-    cJSON_AddNumberToObject(object, "subscriberCount", (double)contents->subscriberCount);
-
-    result = cJSON_PrintUnformatted(object);
-    cJSON_Delete(object);
-    return result;
-}
-
-static char *build_aggregate_json(const YouTubeApiContentsList *contents)
-{
-    cJSON *array;
-    char *result;
-    size_t index;
-
-    if (contents == NULL) {
-        return NULL;
-    }
-
-    array = cJSON_CreateArray();
-    if (array == NULL) {
-        return NULL;
-    }
-
-    for (index = 0; index < contents->count; index++) {
-        char *item_json = build_content_json(&contents->items[index]);
-        cJSON *item;
-
-        if (item_json == NULL) {
-            cJSON_Delete(array);
-            return NULL;
-        }
-        item = cJSON_Parse(item_json);
-        free(item_json);
-        if (item == NULL) {
-            cJSON_Delete(array);
-            return NULL;
-        }
-        cJSON_AddItemToArray(array, item);
-    }
-
-    result = cJSON_PrintUnformatted(array);
-    cJSON_Delete(array);
-    return result;
-}
-
 static size_t write_callback(void *contents, size_t size,
                              size_t count, void *body_data);
 
@@ -470,7 +396,6 @@ YouTubeApiContentsList *getYoutubeContents(const char *keyword)
                             if (youtubeContents->items[index].channelId != NULL &&
                                 strcmp(youtubeContents->items[index].channelId, id->valuestring) == 0) {
                                 youtubeContents->items[index].subscriberCount = copy_json_number(statistics, "subscriberCount");
-                                break;
                             }
                         }
                     }
@@ -509,15 +434,3 @@ void freeYoutubeApiContents(YouTubeApiContentsList *contents)
     free(contents);
 }
 
-/*
- * 取得済みの構造体リストを整形済みのJSON文字列へ変換する.
- * 構造体リストの所有権は呼び出し元が保持する.
- */
-char *getFormattedYoutubeContents(const YouTubeApiContentsList *contents)
-{
-    if (contents == NULL) {
-        return NULL;
-    }
-
-    return build_aggregate_json(contents);
-}

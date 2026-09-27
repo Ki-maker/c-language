@@ -81,6 +81,28 @@ static int hmac(const unsigned char *key, size_t key_length, const char *data,
     return sha256((const unsigned char *)data, strlen(data), output, 1, key, key_length);
 }
 
+static int append_header(struct curl_slist **headers, const char *name,
+                         const char *value)
+{
+    size_t header_length;
+    char *header;
+    struct curl_slist *updated_headers;
+
+    header_length = strlen(name) + strlen(value) + 3;
+    header = malloc(header_length);
+    if (header == NULL) {
+        return 0;
+    }
+    snprintf(header, header_length, "%s: %s", name, value);
+    updated_headers = curl_slist_append(*headers, header);
+    free(header);
+    if (updated_headers == NULL) {
+        return 0;
+    }
+    *headers = updated_headers;
+    return 1;
+}
+
 static char *make_authorization(const char *method, const char *host, const char *uri,
                                 const char *body, const char *access_key,
                                 const char *secret_key, const char *region,
@@ -192,16 +214,24 @@ int executeOpenSearchRequest(const char *method, const char *path, const char *b
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_response); curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L); curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
     {
-        char header[4096];
-        snprintf(header, sizeof(header), "Content-Type: %s", content_type == NULL ? "application/json" : content_type);
-        headers = curl_slist_append(headers, header);
+        char body_hash[SHA256_HEX_SIZE];
+
+        if (!append_header(&headers, "Content-Type",
+                           content_type == NULL ? "application/json" : content_type)) {
+            goto cleanup;
+        }
         if (signed_request) {
-            snprintf(header, sizeof(header), "Host: %s", host_header); headers = curl_slist_append(headers, header);
-            snprintf(header, sizeof(header), "Authorization: %s", authorization); headers = curl_slist_append(headers, header);
-            snprintf(header, sizeof(header), "x-amz-date: %s", timestamp); headers = curl_slist_append(headers, header);
-            { char hash[SHA256_HEX_SIZE]; if (!sha256_hex(body, hash)) goto cleanup;
-              snprintf(header, sizeof(header), "x-amz-content-sha256: %s", hash); headers = curl_slist_append(headers, header); }
-            if (token != NULL && token[0] != '\0') { snprintf(header, sizeof(header), "x-amz-security-token: %s", token); headers = curl_slist_append(headers, header); }
+            if (!sha256_hex(body, body_hash) ||
+                !append_header(&headers, "Host", host_header) ||
+                !append_header(&headers, "Authorization", authorization) ||
+                !append_header(&headers, "x-amz-date", timestamp) ||
+                !append_header(&headers, "x-amz-content-sha256", body_hash)) {
+                goto cleanup;
+            }
+            if (token != NULL && token[0] != '\0' &&
+                !append_header(&headers, "x-amz-security-token", token)) {
+                goto cleanup;
+            }
         }
     }
     if (headers == NULL) goto cleanup;
