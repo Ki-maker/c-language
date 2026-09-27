@@ -119,6 +119,7 @@ char *searchOpenSearch(const YouTubeApiContentsList *contents, int sort_order)
     cJSON_AddItemToObject(request, "query", query);
     cJSON_AddItemToObject(request, "sort", sort);
     cJSON_AddNumberToObject(request, "size", 50);
+    cJSON_AddItemToArray(source_fields, cJSON_CreateString("videoId"));
     cJSON_AddItemToArray(source_fields, cJSON_CreateString("image.large"));
     cJSON_AddItemToArray(source_fields, cJSON_CreateString("image.middle"));
     cJSON_AddItemToArray(source_fields, cJSON_CreateString("title"));
@@ -192,6 +193,8 @@ char *searchOpenSearch(const YouTubeApiContentsList *contents, int sort_order)
                 }
                 
                 cJSON_AddItemToObject(selected_source, "image", selected_image);
+                cJSON_AddItemToObject(selected_source, "videoId",
+                                      copy_json_value_or_null(source, "videoId"));
                 cJSON_AddItemToObject(selected_source, "title",
                                       copy_json_value_or_null(source, "title"));
                 cJSON_AddItemToObject(selected_source, "channelName",

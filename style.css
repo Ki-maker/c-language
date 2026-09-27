@@ -110,10 +110,61 @@ h1 {
 
 .results {
     margin-top: 20px;
+    display: grid;
+    gap: 16px;
+}
+
+.video-card {
+    display: grid;
+    grid-template-columns: minmax(180px, 240px) 1fr;
+    gap: 20px;
+    padding: 16px 0;
+    border-top: 1px solid var(--line);
+    cursor: pointer;
+}
+
+.video-card:focus-visible {
+    outline: 3px solid #f5c5b5;
+    outline-offset: 4px;
+}
+
+.video-image {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    background: #e8edef;
+}
+
+.video-details {
+    min-width: 0;
+}
+
+.video-details h3 {
+    margin: 0 0 12px;
+    color: var(--ink);
+    font-size: 1.05rem;
+    line-height: 1.5;
+}
+
+.video-card:hover .video-details h3 {
+    color: var(--accent);
+}
+
+.video-details p {
+    margin: 6px 0 0;
     color: var(--muted);
     font-family: "Courier New", monospace;
-    font-size: 0.8rem;
-    overflow-wrap: anywhere;
+    font-size: 0.82rem;
+}
+
+.video-meta {
+    margin-top: 8px;
+    padding-top: 8px;
+    color: var(--muted);
+    border-top: 1px solid #edf1f2;
+    font-family: "Courier New", monospace;
+    font-size: 0.82rem;
 }
 
 label {
@@ -186,5 +237,10 @@ button:hover {
     .sort-option {
         padding: 0 8px;
         font-size: 0.78rem;
+    }
+
+    .video-card {
+        grid-template-columns: 1fr;
+        gap: 12px;
     }
 }

@@ -37,22 +37,32 @@
                     <button type="button" class="sort-option" data-sort="underrated">知名度低いが人気</button>
                 </div>
             </section>
-            <div id="results" class="results">{{api_res_data}}</div>
+            <script id="initial-results" type="application/json">{{api_res_data}}</script>
+            <div id="results" class="results"></div>
         </section>
     </main>
     <script>
         (() => {
             const results = document.getElementById("results");
+            const initialResults = document.getElementById("initial-results");
             const buttons = document.querySelectorAll(".sort-option");
             const status = document.getElementById("sort-status");
             const sortOrder = document.getElementById("sort-order");
+            const keywordInput = document.getElementById("keyword");
             let videos;
 
+            if (keywordInput !== null) {
+                keywordInput.value = new URLSearchParams(window.location.search).get("keyword") || "";
+            }
+
             try {
-                videos = JSON.parse(results.textContent.trim() || "[]");
+                videos = JSON.parse(initialResults === null ? "[]" : initialResults.textContent.trim() || "[]");
             } catch (error) {
+                if (initialResults !== null) initialResults.remove();
+                results.textContent = "検索結果を読み込めませんでした。";
                 return;
             }
+            if (initialResults !== null) initialResults.remove();
             if (!Array.isArray(videos)) return;
 
             const number = (video, key) => Number(video[key]) || 0;
@@ -79,12 +89,68 @@
                 return views;
             };
 
+            const formatDuration = (video) => {
+                const totalSeconds = durationSeconds(video);
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+                if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+                return `${minutes}:${String(seconds).padStart(2, "0")}`;
+            };
+
+            const renderVideos = () => {
+                results.replaceChildren();
+                videos.forEach((video) => {
+                    const card = document.createElement("article");
+                    const image = document.createElement("img");
+                    const details = document.createElement("div");
+                    const title = document.createElement("h3");
+                    const channel = document.createElement("div");
+                    const duration = document.createElement("div");
+                    const views = document.createElement("div");
+                    const published = document.createElement("div");
+                    const imageUrl = video.image && (video.image.large || video.image.middle);
+                    const videoUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(video.videoId || "")}`;
+
+                    card.className = "video-card";
+                    card.tabIndex = 0;
+                    card.setAttribute("role", "link");
+                    card.setAttribute("aria-label", `${video.title || "動画"}をYouTubeで開く`);
+                    card.addEventListener("click", () => window.open(videoUrl, "_blank", "noopener,noreferrer"));
+                    card.addEventListener("keydown", (event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            window.open(videoUrl, "_blank", "noopener,noreferrer");
+                        }
+                    });
+                    image.className = "video-image";
+                    image.src = imageUrl || "";
+                    image.alt = video.title || "動画サムネイル";
+                    image.loading = "lazy";
+                    details.className = "video-details";
+                    title.textContent = video.title || "タイトルなし";
+                    channel.className = "video-meta";
+                    channel.textContent = `2. チャンネル名  ${video.channelName || "不明"}`;
+                    duration.className = "video-meta";
+                    duration.textContent = `3. 再生時間  ${formatDuration(video)}`;
+                    views.className = "video-meta";
+                    views.textContent = `4. 再生数  ${number(video, "viewCount").toLocaleString("ja-JP")}`;
+                    published.className = "video-meta";
+                    published.textContent = `5. 公開日  ${video.publishedAt || "不明"}`;
+                    details.append(title, channel, duration, views, published);
+                    card.append(image, details);
+                    results.append(card);
+                });
+            };
+
+            renderVideos();
+
             buttons.forEach((button, index) => {
                 button.addEventListener("click", () => {
                     buttons.forEach((item) => item.classList.remove("is-selected"));
                     button.classList.add("is-selected");
                     videos.sort((left, right) => score(right, button.dataset.sort) - score(left, button.dataset.sort));
-                    results.textContent = JSON.stringify(videos);
+                    renderVideos();
                     status.textContent = button.textContent;
                     sortOrder.value = String(index + 1);
                 });
