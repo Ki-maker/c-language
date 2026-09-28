@@ -164,7 +164,7 @@ static int extract_sort_order_from_request(const char *request)
  */
 static int send_template(FILE *html_file, SOCKET client_socket,
                          const char *request, const char *message,
-                         const char *keyword, int sort_order)
+                         const char *api_result)
 {
     static const char api_placeholder[] = "{{api_res_data}}";
     static const char message_placeholder[] = "{{message}}";
@@ -196,80 +196,11 @@ static int send_template(FILE *html_file, SOCKET client_socket,
         candidate[candidate_length] = '\0';
 
         if (strcmp(candidate, api_placeholder) == 0) {
-            YouTubeApiContentsList *contents = NULL;
-            char *api_result = NULL;
+            const char *data = api_result == NULL ? "[]" : api_result;
 
-            if (keyword == NULL || keyword[0] == '\0') {
-                continue;
-            }
-
-            // API検索して構造体リストを取得し、JSON文字列へ変換する.
-            contents = getYoutubeContents(keyword);
-            if (contents == NULL) {
+            if (!send_chunk(&client_socket, data, strlen(data))) {
                 return 0;
             }
-            fprintf(stdout, "[YouTube contents] count=%zu\n", contents->count);
-            for (size_t index = 0; index < contents->count; index++) {
-                YouTubeApiContents *item = &contents->items[index];
-                fprintf(stdout,
-                    "[%zu]\n"
-                    "  videoId=%s\n"
-                    "  channelId=%s\n"
-                    "  title=%s\n"
-                    "  channelName=%s\n"
-                    "  imageLarge=%s\n"
-                    "  imageMiddle=%s\n"
-                    "  publishedAt=%s\n"
-                    "  viewCount=%lld\n"
-                    "  likeCount=%lld\n"
-                    "  commentCount=%lld\n"
-                    "  videoTime=%s\n"
-                    "  subscriberCount=%lld\n",
-                        index,
-                        item->videoId == NULL ? "" : item->videoId,
-                    item->channelId == NULL ? "" : item->channelId,
-                        item->title == NULL ? "" : item->title,
-                    item->channelName == NULL ? "" : item->channelName,
-                    item->imageLarge == NULL ? "" : item->imageLarge,
-                    item->imageMiddle == NULL ? "" : item->imageMiddle,
-                    item->publishedAt == NULL ? "" : item->publishedAt,
-                    item->viewCount,
-                    item->likeCount,
-                    item->commentCount,
-                    item->videoTime == NULL ? "" : item->videoTime,
-                    item->subscriberCount);
-            }
-            fflush(stdout);
-
-            // OpenSearchにデータを入れる処理を行う
-            setYoutubeContentsToOpenSearch(contents);
-
-            // 保存済みvideoIdを使ってOpenSearchを検索する
-            api_result = searchOpenSearch(contents, sort_order);
-            if (api_result == NULL) {
-                fprintf(stderr, "OpenSearch検索結果を取得できませんでした\n");
-                freeYoutubeApiContents(contents);
-                return 0;
-            }
-
-
-            if(api_result == NULL || strlen(api_result) == 0) {
-                fprintf(stderr, "APIレスポンスが空です\n");
-                free(api_result);
-                freeYoutubeApiContents(contents);
-                return 0;
-            }
-
-            
-
-            if (!send_chunk(&client_socket, api_result, strlen(api_result))) {
-                free(api_result);
-                freeYoutubeApiContents(contents);
-                return 0;
-            }
-
-            free(api_result);
-            freeYoutubeApiContents(contents);
         } else if (strcmp(candidate, message_placeholder) == 0) {
             if (message != NULL &&
                 !send_chunk(&client_socket, message, (int)strlen(message))) {
@@ -281,6 +212,78 @@ static int send_template(FILE *html_file, SOCKET client_socket,
     }
 
     return ferror(html_file) == 0;
+}
+
+/*
+ * キーワードを検索し、結果のJSON文字列を返す.
+ * 取得に失敗した場合はerror_messageにエラー文言を設定してNULLを返す.
+ */
+static char *perform_search(const char *keyword, int sort_order,
+                            const char **error_message)
+{
+    YouTubeApiContentsList *contents;
+    char *api_result;
+
+    *error_message = NULL;
+    if (keyword == NULL || keyword[0] == '\0') {
+        return NULL;
+    }
+
+    // API検索して構造体リストを取得し、JSON文字列へ変換する.
+    contents = getYoutubeContents(keyword);
+    if (contents == NULL) {
+        *error_message = "このキーワードは検索できません";
+        return NULL;
+    }
+
+    fprintf(stdout, "[YouTube contents] count=%zu\n", contents->count);
+    for (size_t index = 0; index < contents->count; index++) {
+        YouTubeApiContents *item = &contents->items[index];
+        fprintf(stdout,
+            "[%zu]\n"
+            "  videoId=%s\n"
+            "  channelId=%s\n"
+            "  title=%s\n"
+            "  channelName=%s\n"
+            "  imageLarge=%s\n"
+            "  imageMiddle=%s\n"
+            "  publishedAt=%s\n"
+            "  viewCount=%lld\n"
+            "  likeCount=%lld\n"
+            "  commentCount=%lld\n"
+            "  videoTime=%s\n"
+            "  subscriberCount=%lld\n",
+                index,
+                item->videoId == NULL ? "" : item->videoId,
+            item->channelId == NULL ? "" : item->channelId,
+                item->title == NULL ? "" : item->title,
+            item->channelName == NULL ? "" : item->channelName,
+            item->imageLarge == NULL ? "" : item->imageLarge,
+            item->imageMiddle == NULL ? "" : item->imageMiddle,
+            item->publishedAt == NULL ? "" : item->publishedAt,
+            item->viewCount,
+            item->likeCount,
+            item->commentCount,
+            item->videoTime == NULL ? "" : item->videoTime,
+            item->subscriberCount);
+    }
+    fflush(stdout);
+
+    // OpenSearchにデータを入れる処理を行う
+    setYoutubeContentsToOpenSearch(contents);
+
+    // 保存済みvideoIdを使ってOpenSearchを検索する
+    api_result = searchOpenSearch(contents, sort_order);
+    if (api_result == NULL || strlen(api_result) == 0) {
+        fprintf(stderr, "OpenSearch検索結果を取得できませんでした\n");
+        free(api_result);
+        freeYoutubeApiContents(contents);
+        *error_message = "このキーワードは検索できません";
+        return NULL;
+    }
+
+    freeYoutubeApiContents(contents);
+    return api_result;
 }
 
 /*
@@ -402,12 +405,19 @@ int main(void)
             "\r\n",
             content_type);
 
+        const char *error_message = NULL;
+        char *api_result = perform_search(keyword, sort_order, &error_message);
+        if (error_message != NULL) {
+            search_message = error_message;
+        }
+
         if (!send_all(client_socket, response, header_length) ||
             !send_template(html_file, client_socket, request,
-                           search_message, keyword, sort_order)) {
+                           search_message, api_result)) {
             fprintf(stderr, "Failed to send the HTTP response.\n");
         }
 
+        free(api_result);
         fclose(html_file);
         send_all(client_socket, "0\r\n\r\n", 5);
         shutdown(client_socket, SD_SEND);
