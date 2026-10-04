@@ -18,6 +18,62 @@ typedef struct {
     size_t length;
 } gemini_buffer;
 
+#define GEMINI_CACHE_ENTRIES 100
+#define GEMINI_CACHE_KEYWORD_BYTES 64
+
+typedef struct {
+    char keyword[GEMINI_CACHE_KEYWORD_BYTES];
+    char *suggestions;
+} gemini_cache_entry;
+
+// プロセス内のキャッシュ. 満杯になると古い順に上書きする.
+static gemini_cache_entry gemini_cache[GEMINI_CACHE_ENTRIES];
+static size_t gemini_cache_next;
+
+static char *copy_string(const char *text)
+{
+    size_t size = strlen(text) + 1;
+    char *copy = malloc(size);
+
+    if (copy != NULL) {
+        memcpy(copy, text, size);
+    }
+    return copy;
+}
+
+/* キャッシュを探し、見つかれば複製を返す(呼び出し元がfree). 無ければNULL. */
+static char *cache_lookup(const char *keyword)
+{
+    for (size_t i = 0; i < GEMINI_CACHE_ENTRIES; i++) {
+        if (gemini_cache[i].suggestions != NULL &&
+            strcmp(gemini_cache[i].keyword, keyword) == 0) {
+            return copy_string(gemini_cache[i].suggestions);
+        }
+    }
+    return NULL;
+}
+
+/* キャッシュに保存する. */
+static void cache_store(const char *keyword, const char *suggestions)
+{
+    gemini_cache_entry *entry;
+    char *copy;
+
+    if (strlen(keyword) >= GEMINI_CACHE_KEYWORD_BYTES) {
+        return;
+    }
+    copy = copy_string(suggestions);
+    if (copy == NULL) {
+        return;
+    }
+
+    entry = &gemini_cache[gemini_cache_next];
+    free(entry->suggestions);
+    strcpy(entry->keyword, keyword);
+    entry->suggestions = copy;
+    gemini_cache_next = (gemini_cache_next + 1) % GEMINI_CACHE_ENTRIES;
+}
+
 static size_t write_callback(void *contents, size_t size, size_t count,
                              void *user_data)
 {
@@ -160,6 +216,14 @@ char *getGeminiSuggestions(const char *keyword)
     if (!isGeminiKeywordEligible(keyword)) {
         return NULL;
     }
+
+    result = cache_lookup(keyword);
+    if (result != NULL) {
+        fprintf(stdout, "[Gemini cache hit] keyword=%s\n", keyword);
+        fflush(stdout);
+        return result;
+    }
+
     if (api_key == NULL || api_key[0] == '\0') {
         fprintf(stderr, "GEMINI_API_KEYが設定されていません\n");
         return NULL;
@@ -201,6 +265,9 @@ char *getGeminiSuggestions(const char *keyword)
     if (code == CURLE_OK && status == 200 && response.data != NULL) {
         fprintf(stdout, "[Gemini raw response]\n%s\n", response.data);
         result = extract_suggestions(response.data);
+        if (result != NULL) {
+            cache_store(keyword, result);
+        }
         fprintf(stdout, "[Gemini suggestions] keyword=%s result=%s\n", keyword,
                 result == NULL ? "(解析失敗)" : result);
         fflush(stdout);
