@@ -1,9 +1,9 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g
-CPPFLAGS = -Irouter -IyoutubeApiSearch
+CPPFLAGS = -Irouter -IyoutubeApiSearch -IgeminiSearch
 LDLIBS = -lcurl -lcjson -lws2_32 -lbcrypt
 TARGET = main.exe
-SOURCES = $(wildcard *.c opensearchIngestion/*.c opensearchDelete/*.c opensearchSearch/*.c router/*.c youtubeApiSearch/*.c)
+SOURCES = $(wildcard *.c opensearchIngestion/*.c opensearchDelete/*.c opensearchSearch/*.c router/*.c youtubeApiSearch/*.c geminiSearch/*.c)
 
 .PHONY: all clean
 

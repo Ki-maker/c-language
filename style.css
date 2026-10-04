@@ -180,6 +180,38 @@ label {
     gap: 12px;
 }
 
+.suggestion-list {
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.suggestion-list:empty {
+    display: none;
+}
+
+.suggestion-item {
+    display: block;
+    width: 100%;
+    min-height: 40px;
+    padding: 0 16px;
+    color: var(--ink);
+    background: #ffffff;
+    border: 1px solid var(--line);
+    border-top-width: 0;
+    font-weight: normal;
+    text-align: left;
+}
+
+.suggestion-list li:first-child .suggestion-item {
+    border-top-width: 1px;
+}
+
+.suggestion-item:hover {
+    color: #ffffff;
+    background: var(--accent-dark);
+}
+
 input,
 button {
     min-height: 48px;

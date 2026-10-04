@@ -16,10 +16,11 @@
             <form action="/search" method="get">
                 <label for="keyword">検索キーワード</label>
                 <div class="search-row">
-                    <input id="keyword" name="keyword" type="search" placeholder="例: C言語">
+                    <input id="keyword" name="keyword" type="search" maxlength="20" placeholder="例: C言語" autocomplete="off">
                     <input id="sort-order" name="sort_order" type="hidden" value="1">
                     <button type="submit">検索</button>
                 </div>
+                <ul id="keyword-suggestions" class="suggestion-list" aria-label="検索候補"></ul>
                 <p>{{message}}</p>
             </form>
             <section class="sort-panel" aria-labelledby="sort-heading">
@@ -53,6 +54,43 @@
 
             if (keywordInput !== null) {
                 keywordInput.value = new URLSearchParams(window.location.search).get("keyword") || "";
+
+                const suggestions = document.getElementById("keyword-suggestions");
+                const MIN_CHARS = 2;
+                const DEBOUNCE_MS = 1500;
+                let timer = null;
+                let controller = null;
+
+                keywordInput.addEventListener("input", () => {
+                    clearTimeout(timer);
+                    if (controller !== null) controller.abort();
+                    const keyword = keywordInput.value.trim();
+                    if ([...keyword].length < MIN_CHARS) {
+                        suggestions.replaceChildren();
+                        return;
+                    }
+                    timer = setTimeout(async () => {
+                        controller = new AbortController();
+                        try {
+                            const response = await fetch(`/suggest?keyword=${encodeURIComponent(keyword)}`, { signal: controller.signal });
+                            const items = await response.json();
+                            suggestions.replaceChildren(...items.map((text) => {
+                                const item = document.createElement("li");
+                                const choice = document.createElement("button");
+                                choice.type = "button";
+                                choice.className = "suggestion-item";
+                                choice.textContent = String(text);
+                                choice.addEventListener("click", () => {
+                                    keywordInput.value = choice.textContent;
+                                });
+                                item.append(choice);
+                                return item;
+                            }));
+                        } catch (error) {
+                            if (error.name !== "AbortError") suggestions.replaceChildren();
+                        }
+                    }, DEBOUNCE_MS);
+                });
             }
 
             try {

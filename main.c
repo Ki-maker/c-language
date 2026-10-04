@@ -9,6 +9,7 @@
 
 #include "router.h"
 #include "youtubeApiSearch.h"
+#include "geminiSearch/geminiSearch.h"
 #include "opensearchIngestion/opensearchIngestion.h"
 #include "opensearchSearch/opensearchSearch.h"
 
@@ -356,10 +357,36 @@ int main(void)
         }
         request[request_length] = '\0';
 
-        char keyword[40] = {0};
+        char keyword[64] = {0};
         int sort_order;
         extract_keyword_from_request(request, keyword, sizeof(keyword));
         sort_order = extract_sort_order_from_request(request);
+
+        if (strncmp(request, "GET /suggest?", strlen("GET /suggest?")) == 0) {
+            char *geminiSuggestion = NULL;
+
+            fprintf(stdout, "[/suggest] keyword=%s\n", keyword);
+            fflush(stdout);
+            if (isGeminiKeywordEligible(keyword)) {
+                geminiSuggestion = getGeminiSuggestions(keyword);
+            }
+            const char *geminiSuggestionList = geminiSuggestion == NULL ? "[]" : geminiSuggestion;
+            char suggest_header[128];
+            int suggest_header_length = snprintf(
+                suggest_header, sizeof(suggest_header),
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json; charset=UTF-8\r\n"
+                "Content-Length: %zu\r\n"
+                "Connection: close\r\n"
+                "\r\n",
+                strlen(geminiSuggestionList));
+            send_all(client_socket, suggest_header, suggest_header_length);
+            send_all(client_socket, geminiSuggestionList, (int)strlen(geminiSuggestionList));
+            free(geminiSuggestion);
+            shutdown(client_socket, SD_SEND);
+            closesocket(client_socket);
+            continue;
+        }
 
         const char *file_name = "index.html";
         const char *content_type = "text/html; charset=UTF-8";
