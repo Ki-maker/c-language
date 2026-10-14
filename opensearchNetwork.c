@@ -103,7 +103,7 @@ static int append_header(struct curl_slist **headers, const char *name,
     return 1;
 }
 
-static char *make_authorization(const char *method, const char *host, const char *uri,
+static char *make_authorization(const char *method, const char *host, const char *uri, const char *query,
                                 const char *body, const char *access_key,
                                 const char *secret_key, const char *region,
                                 const char *service, const char *token,
@@ -131,8 +131,8 @@ static char *make_authorization(const char *method, const char *host, const char
             "host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
             host, payload_hash, timestamp);
     }
-    snprintf(canonical_request, sizeof(canonical_request), "%s\n%s\n\n%s\n%s\n%s",
-             method, uri, canonical_headers, signed_headers, payload_hash);
+    snprintf(canonical_request, sizeof(canonical_request), "%s\n%s\n%s\n%s\n%s\n%s",
+             method, uri, query, canonical_headers, signed_headers, payload_hash);
     if (!sha256_hex(canonical_request, canonical_hash)) return NULL;
     snprintf(scope, sizeof(scope), "%s/%s/%s/aws4_request", date, region, service);
     snprintf(string_to_sign, sizeof(string_to_sign), "AWS4-HMAC-SHA256\n%s\n%s\n%s",
@@ -162,7 +162,7 @@ int executeOpenSearchRequest(const char *method, const char *path, const char *b
     const char *region = getenv("AWS_REGION");
     const char *service = getenv("OPENSEARCH_SERVICE");
     const char *token = getenv("AWS_SESSION_TOKEN");
-    char *url = NULL, *host = NULL, *uri = NULL, *port = NULL;
+    char *url = NULL, *host = NULL, *uri = NULL, *port = NULL, *query = NULL;
     char *host_header = NULL, *authorization = NULL;
     char timestamp[17], date[9];
     CURLU *parts = NULL;
@@ -191,6 +191,7 @@ int executeOpenSearchRequest(const char *method, const char *path, const char *b
     if (parts == NULL || curl_url_set(parts, CURLUPART_URL, url, 0) != CURLUE_OK ||
         curl_url_get(parts, CURLUPART_HOST, &host, 0) != CURLUE_OK ||
         curl_url_get(parts, CURLUPART_PATH, &uri, 0) != CURLUE_OK) goto cleanup;
+    if (curl_url_get(parts, CURLUPART_QUERY, &query, 0) != CURLUE_OK) query = NULL;
     if (curl_url_get(parts, CURLUPART_PORT, &port, 0) == CURLUE_OK) {
         host_header = malloc(strlen(host) + strlen(port) + 2);
         if (host_header != NULL) snprintf(host_header, strlen(host) + strlen(port) + 2, "%s:%s", host, port);
@@ -203,7 +204,7 @@ int executeOpenSearchRequest(const char *method, const char *path, const char *b
         tm_now.tm_mday = now.wDay; tm_now.tm_hour = now.wHour; tm_now.tm_min = now.wMinute; tm_now.tm_sec = now.wSecond;
         if (strftime(timestamp, sizeof(timestamp), "%Y%m%dT%H%M%SZ", &tm_now) != 16) goto cleanup;
         memcpy(date, timestamp, 8); date[8] = '\0';
-        authorization = make_authorization(method, host_header, uri, body, access_key, secret_key,
+        authorization = make_authorization(method, host_header, uri, query != NULL ? query : "", body, access_key, secret_key,
                                            region, service, token, timestamp, date);
         if (authorization == NULL) goto cleanup;
     }
@@ -241,7 +242,7 @@ int executeOpenSearchRequest(const char *method, const char *path, const char *b
     *response_body = response.data; response.data = NULL; success = 1;
 cleanup:
     if (curl != NULL) curl_easy_cleanup(curl); curl_slist_free_all(headers);
-    if (parts != NULL) curl_url_cleanup(parts); curl_free(host); curl_free(port); curl_free(uri);
+    if (parts != NULL) curl_url_cleanup(parts); curl_free(host); curl_free(port); curl_free(uri); curl_free(query);
     free(host_header); free(url); free(authorization); free(response.data);
     return success;
 }

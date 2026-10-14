@@ -19,18 +19,24 @@ int deleteExpiredYoutubeContentsFromOpenSearch(void)
     int success = 0;
 
     if (index_name == NULL || index_name[0] == '\0') index_name = "youtube_search";
-    if (snprintf(path, sizeof(path), "/%s/_delete_by_query", index_name) >= (int)sizeof(path)) return 0;
+    if (snprintf(path, sizeof(path), "/%s/_delete_by_query?conflicts=proceed", index_name) >= (int)sizeof(path)) return 0;
     // deleteのクエリの作成し、OpenSearchに送信する
     if (!executeOpenSearchRequest("POST", path,
         "{\"query\":{\"range\":{\"insertedAt\":{\"lt\":\"now-1m\"}}}}",
         "application/json", &response, &http_status)) goto cleanup;
-    if (http_status < 200 || http_status >= 300) goto cleanup;
+    if (http_status < 200 || http_status >= 300) {
+        fprintf(stderr, "定期削除: HTTP %ld %s\n", http_status, response == NULL ? "" : response);
+        goto cleanup;
+    }
     root = cJSON_Parse(response == NULL ? "" : response);
     if (!cJSON_IsObject(root)) goto cleanup;
     deleted = cJSON_GetObjectItemCaseSensitive(root, "deleted");
     failures = cJSON_GetObjectItemCaseSensitive(root, "failures");
     timed_out = cJSON_GetObjectItemCaseSensitive(root, "timed_out");
-    if (!cJSON_IsArray(failures) || cJSON_IsTrue(timed_out) || cJSON_GetArraySize(failures) > 0) goto cleanup;
+    if (cJSON_IsTrue(timed_out) || (cJSON_IsArray(failures) && cJSON_GetArraySize(failures) > 0)) {
+        fprintf(stderr, "定期削除: タイムアウトまたは失敗あり %s\n", response == NULL ? "" : response);
+        goto cleanup;
+    }
     printf("定期削除: insertedAtが1分以上前の文書を%d件削除しました\n",
            cJSON_IsNumber(deleted) ? deleted->valueint : 0);
     success = 1;
