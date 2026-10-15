@@ -126,6 +126,9 @@ char *searchOpenSearch(const YouTubeApiContentsList *contents, int sort_order)
     cJSON_AddItemToArray(source_fields, cJSON_CreateString("channelName"));
     cJSON_AddItemToArray(source_fields, cJSON_CreateString("videoTime"));
     cJSON_AddItemToArray(source_fields, cJSON_CreateString("viewCount"));
+    cJSON_AddItemToArray(source_fields, cJSON_CreateString("likeCount"));
+    cJSON_AddItemToArray(source_fields, cJSON_CreateString("commentCount"));
+    cJSON_AddItemToArray(source_fields, cJSON_CreateString("subscriberCount"));
     cJSON_AddItemToArray(source_fields, cJSON_CreateString("publishedAt"));
     cJSON_AddItemToObject(request, "_source", source_fields);
 
@@ -203,6 +206,12 @@ char *searchOpenSearch(const YouTubeApiContentsList *contents, int sort_order)
                                       copy_json_value_or_null(source, "videoTime"));
                 cJSON_AddItemToObject(selected_source, "viewCount",
                                       copy_json_value_or_null(source, "viewCount"));
+                cJSON_AddItemToObject(selected_source, "likeCount",
+                                      copy_json_value_or_null(source, "likeCount"));
+                cJSON_AddItemToObject(selected_source, "commentCount",
+                                      copy_json_value_or_null(source, "commentCount"));
+                cJSON_AddItemToObject(selected_source, "subscriberCount",
+                                      copy_json_value_or_null(source, "subscriberCount"));
                 cJSON_AddItemToObject(selected_source, "publishedAt",
                                       copy_json_value_or_null(source, "publishedAt"));
                 cJSON_AddItemToArray(source_array, selected_source);

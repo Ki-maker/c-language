@@ -50,10 +50,19 @@
             const status = document.getElementById("sort-status");
             const sortOrder = document.getElementById("sort-order");
             const keywordInput = document.getElementById("keyword");
+            const searchParams = new URLSearchParams(window.location.search);
             let videos;
 
+            const requestedSortOrder = Number(searchParams.get("sort_order"));
+            if (Number.isInteger(requestedSortOrder) && requestedSortOrder >= 1 && requestedSortOrder <= buttons.length) {
+                const selectedButton = buttons[requestedSortOrder - 1];
+                buttons.forEach((button) => button.classList.toggle("is-selected", button === selectedButton));
+                status.textContent = selectedButton.textContent;
+                sortOrder.value = String(requestedSortOrder);
+            }
+
             if (keywordInput !== null) {
-                keywordInput.value = new URLSearchParams(window.location.search).get("keyword") || "";
+                keywordInput.value = searchParams.get("keyword") || "";
 
                 const suggestions = document.getElementById("keyword-suggestions");
                 const MIN_CHARS = 2;
