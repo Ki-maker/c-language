@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include <cjson/cJSON.h>
 
@@ -110,6 +111,16 @@ char *searchOpenSearch(const YouTubeApiContentsList *contents, int sort_order)
         script_body = cJSON_CreateObject();
         if (script == NULL || script_body == NULL) goto cleanup;
         cJSON_AddStringToObject(script_body, "source", get_sort_script(sort_order));
+        if (sort_order == 4) {
+            cJSON *params = cJSON_CreateObject();
+            time_t now = time(NULL);
+            if (params == NULL || now == (time_t)-1 ||
+                cJSON_AddNumberToObject(params, "now", (double)now * 1000.0) == NULL) {
+                cJSON_Delete(params);
+                goto cleanup;
+            }
+            cJSON_AddItemToObject(script_body, "params", params);
+        }
         cJSON_AddItemToObject(script, "script", script_body);
         cJSON_AddStringToObject(script, "type", "number");
         cJSON_AddStringToObject(script, "order", "desc");
