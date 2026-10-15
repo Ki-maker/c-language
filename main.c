@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <winsock2.h>
+#include <ws2tcpip.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -71,6 +72,11 @@ static int send_chunk(void *context, const char *data, size_t length)
     // headerを32のサイズとして確保する
     // TODO: 32のサイズで十分かどうかを検討する必要がある
     char header[32];
+
+    // 長さ0のチャンクは通信終端を意味するため送らない
+    if (length == 0) {
+        return 1;
+    }
 
     // lengthを16進数に変換してheaderに格納する(しかし、headerのサイズを超えないようにする)
     int header_length = snprintf(header, sizeof(header), "%zx\r\n", length);
@@ -170,17 +176,30 @@ static int send_template(FILE *html_file, SOCKET client_socket,
     static const char api_placeholder[] = "{{api_res_data}}";
     static const char message_placeholder[] = "{{message}}";
     char candidate[32];
+    char out[4096];
+    size_t out_length = 0;
     int current;
 
     (void)request;
 
     while ((current = fgetc(html_file)) != EOF) {
         if (current != '{') {
-            char character = (char)current;
-            if (!send_chunk(&client_socket, &character, 1)) {
-                return 0;
+            out[out_length++] = (char)current;
+            if (out_length == sizeof(out)) {
+                if (!send_chunk(&client_socket, out, out_length)) {
+                    return 0;
+                }
+                out_length = 0;
             }
             continue;
+        }
+
+        // 溜めたデータを先に送ってからプレースホルダを処理する
+        if (out_length > 0) {
+            if (!send_chunk(&client_socket, out, out_length)) {
+                return 0;
+            }
+            out_length = 0;
         }
 
         size_t candidate_length = 0;
@@ -212,6 +231,9 @@ static int send_template(FILE *html_file, SOCKET client_socket,
         }
     }
 
+    if (out_length > 0 && !send_chunk(&client_socket, out, out_length)) {
+        return 0;
+    }
     return ferror(html_file) == 0;
 }
 
@@ -349,6 +371,17 @@ int main(void)
             break;
         }
 
+        // 小さい送信が遅延しないようNagleアルゴリズムを無効化する
+        BOOL no_delay = TRUE;
+        setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY,
+                   (const char *)&no_delay, sizeof(no_delay));
+
+        // ブラウザの先行接続(データを送らない接続)でrecvが永久に待たないようにする
+        DWORD receive_timeout_ms = 1000;
+        setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO,
+                   (const char *)&receive_timeout_ms,
+                   sizeof(receive_timeout_ms));
+
         int request_length = recv(client_socket, request,
                                   sizeof(request) - 1, 0);
         if (request_length <= 0) {
@@ -433,7 +466,11 @@ int main(void)
             content_type);
 
         const char *error_message = NULL;
-        char *api_result = perform_search(keyword, sort_order, &error_message);
+        // CSSなどのリクエストはRefererに?keyword=が含まれるため、検索は/searchのみで行う
+        char *api_result = NULL;
+        if (strncmp(request, "GET /search", strlen("GET /search")) == 0) {
+            api_result = perform_search(keyword, sort_order, &error_message);
+        }
         if (error_message != NULL) {
             search_message = error_message;
         }
