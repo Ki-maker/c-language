@@ -15,7 +15,7 @@ int route_request(const char *request, const char **file_name,
     *message = NULL;
 
     if (strncmp(request, "GET /style.css", strlen("GET /style.css")) == 0) {
-        *file_name = "style.css";
+        *file_name = "style-modern.css";
         *content_type = "text/css; charset=UTF-8";
         return 1;
     }
